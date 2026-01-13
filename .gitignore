@@ -7,3 +7,4 @@ libcup.a
 libcup.o
 libcup.so
 test.txt
+fib.c
