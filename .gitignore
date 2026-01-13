@@ -1,0 +1,9 @@
+tests/
+test/
+cup
+cup.elf
+a.out
+libcup.a
+libcup.o
+libcup.so
+test.txt
