@@ -3,7 +3,6 @@
  * @brief Lexical analyzer (tokenizer) implementation
  */
 
-// #include "../../include/tokens.h"
 #include "../include/cup.h"
 #include <assert.h>
 #include <string.h>
@@ -26,69 +25,189 @@ static inline int isID(const unsigned char c) {
  * @brief Find index of character in string
  * @param str String to search
  * @param c Character to find
- * @return Index of character
+ * @return Index of character or -1 on end
  */
-static size_t strindex(const char *str, const char c) {
+static int strindex(const char *str, const char c) {
   const char *ptr = str;
-  while (*ptr != c)
+  while (*ptr != c) {
+    if (*ptr == '\0') return -1;
     ptr++;
+  }
   return ptr - str;
+}
+
+/* ========================================================================== */
+/*                         STRING INTERNING                                   */
+/* ========================================================================== */
+
+const uint8_t* getdata(CUPState* state, const char* str, size_t len) {
+  if (state->data_size < len) return 0;
+  for (uint8_t* i = state->data + state->data_size - len; (uint8_t*)str >= state->data; i--) {
+    if (memcmp(i, str, len) == 0)
+      return i;
+  }
+  return 0;
+}
+
+/**
+ * @brief Get string from interned string table
+ * @param state Compiler state
+ * @param index String index
+ * @return Pointer to string or empty string if not found
+ */
+const char *getString(CUPState *state, size_t index) {
+  if (state->names == NULL || index == SIZE_MAX)
+    return NULL;
+
+  /* Find the start sentinel [0, 0] */
+  uint8_t *ptr = state->names - 1;
+  while (ptr > state->names - 1000) { /* safety limit */
+    if (ptr[0] == '\0' && ptr[-1] == '\0') {
+      ptr++; /* Move to position after [0, 0] */
+      break;
+    }
+    ptr--;
+  }
+
+  /* Walk forward and count strings */
+  size_t current_index = 0;
+  while (ptr < state->names) {
+    if (*ptr == '\0') {
+      ptr++;
+      continue;
+    }
+    if (current_index == index)
+      return (const char *)ptr;
+    while (*ptr++);
+    current_index++;
+  }
+
+  return NULL;
+}
+
+/**
+ * @brief Intern identifier string
+ * @param state Compiler state
+ * @param str String to intern
+ * @param len String length
+ * @return Pointer to interned string
+ */
+uint8_t *idToken(CUPState *state, const char *str, size_t len) {
+  if (len == 2 && memcmp(str, "if", 2) == 0) {
+    state->type = T_IF;
+    return NULL;
+  }
+  if (len == 3 && memcmp(str, "for", 3) == 0) {
+    state->type = T_FOR;
+    return NULL;
+  }
+  if (len == 4 && memcmp(str, "else", 4) == 0) {
+    state->type = T_ELSE;
+    return NULL;
+  }
+  if (len == 5 && memcmp(str, "break", 5) == 0) {
+    state->type = T_BREAK;
+    return NULL;
+  }
+  if (len == 5 && memcmp(str, "while", 5) == 0) {
+    state->type = T_WHILE;
+    return NULL;
+  }
+  if (len == 6 && memcmp(str, "return", 6) == 0) {
+    state->type = T_RETURN;
+    return NULL;
+  }
+  if (len == 8 && memcmp(str, "continue", 8) == 0) {
+    state->type = T_CONTINUE;
+    return NULL;
+  }
+  uint8_t *current = state->names - 1;
+  state->nodes.value = 0;
+  uint8_t *keyword = NULL;
+
+  for (size_t l = 0;; current--) {
+    if (current[-1] != '\0') {
+      /* Found [non-0, X] continue to found [0, non-0](strings_start) */
+      l++;
+      continue;
+    }
+    if (*current == '\0') {
+      /* Found [0, 0] sentinel so keyword not found */
+      current--;
+      if (keyword == NULL) {
+        const size_t size = state->names - current;
+        state->names = (uint8_t *)cup_realloc(current, size + len + 1);
+        state->names += size;
+        keyword = state->names;
+        memcpy(state->names, str, len);
+        state->names[len] = '\0';
+        state->names += len + 1;
+      }
+      return keyword;
+    }
+    state->node.value++;
+    if (keyword == NULL) {
+      /* Found [0, non-0] strings_start */
+      if (l == len && memcmp(str, current, l) == 0) {
+        /* Match found and we need go to start */
+        keyword = current;
+        state->node.value = 0;
+      } else {
+        /* No match, continue to next keyword in backward order */
+        l = 0;
+      }
+    }
+  }
 }
 
 /* ========================================================================== */
 /*                         LOCATION TRACKING                                  */
 /* ========================================================================== */
 
-static int newlineChar(const char *stream, Loc *next) {
+static int newlineChar(const char *stream) {
   const char *s = stream;
-  if (*stream == '\r') {
-    if (stream[1] == '\n')
-      stream++;
-    goto newline;
-  }
-  if (*stream == '\n' || *stream == '\r') {
-  newline:
-    next->line++;
-    next->col = 1;
+  if (*stream == '\r')
     stream++;
-  }
+  if (*stream == '\n')
+    stream++;
   return stream - s;
 }
 
-static void nextChar(CUPState *state, Loc *next) {
-  int i = newlineChar(state->input_stream, next);
+static void nextChar(const char **stream, Loc *next) {
+  int i = newlineChar(*stream);
   if (i == 0) {
     next->col++;
-    i = 1;
+    *stream++;
+  } else {
+    *stream += i;
+    next->line++;
+    next->col = 1;
   }
-  state->input_stream += i;
 }
 
 /* ========================================================================== */
 /*                         NUMBER PARSING                                     */
 /* ========================================================================== */
 
-const char *binaryChar(CUPState *state, const char *p) {
+static const char *binaryChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (; (*p == '0' || *p == '1') || *p == '_'; ++p)
     if (*p != '_')
       value = (value << 1) | (*p & 1);
-  state->value = value;
-  state->loc.col += (p - state->input_stream);
+  state->nodes.value = value;
   return p;
 }
 
-const char *octalChar(CUPState *state, const char *p) {
+static const char *octalChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (; (*p >= '0' && *p <= '7') || *p == '_'; ++p)
     if (*p != '_')
       value = (value << 3) | (*p & 7);
-  state->value = value;
-  state->loc.col += (p - state->input_stream);
+  state->nodes.value = value;
   return p;
 }
 
-const char *hexChar(CUPState *state, const char *p) {
+static const char *hexChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (;; ++p) {
     if (*p == '_')
@@ -102,8 +221,7 @@ const char *hexChar(CUPState *state, const char *p) {
     else
       break;
   }
-  state->value = value;
-  state->node.loc.col += (p - state->input_stream);
+  state->nodes.value = value;
   return p;
 }
 
@@ -131,6 +249,17 @@ inline int zeroChar(CUPState *state, const char *p) {
   return 0;
 }
 
+const size_t numberChar(CUPState* state) {
+  const char* ptr = state->input_stream;
+  size_t value = 0;
+  for (;(*state->input_stream >= '0' && *state->input_stream <= '9') ||
+           *state->input_stream == '_';state->input_stream++) {
+    if (*state->input_stream == '_') continue;
+    value = value * 10 + (*state->input_stream - '0');
+  }
+  return value;
+}
+
 /* ========================================================================== */
 /*                         TOKEN EXTRACTION                                   */
 /* ========================================================================== */
@@ -139,7 +268,7 @@ inline int zeroChar(CUPState *state, const char *p) {
  * @brief Get next token from input stream
  * @param state Compiler state
  */
-void getToken(CUPState *state, Loc *next) {
+void getToken(CUPState *state) {
   /* Operator tables for quick lookup */
   static const CTType types1[] = {T_ADD, T_SUB,  T_MUL,   T_DIV, T_MOD, T_AND,
                                   T_OR,  T_LESS, T_GREAT, T_XOR, T_NOT, T_EQ};
@@ -150,15 +279,24 @@ void getToken(CUPState *state, Loc *next) {
       T_ORB,   T_CRB,    T_OCB,    T_CCB, T_OSB, T_CSB,  T_DOT,   T_COMMA,
       T_COLON, T_SCOLON, T_IMPORT, T_ASK, T_AT,  T_THIS, T_CATNL, T_EXTERNAL};
 
-  state->value = 0;
-  assert(next != 0);
+  state->nodes.value = 0;
 
-  /* Skip whitespace (except newlines) */
-  const char *st = state->input_stream;
-  while (*state->input_stream == ' ' || *state->input_stream == '\t')
-    state->input_stream++;
-  next->col += (state->input_stream - st);
-  state->loc = *next;
+  if (state->priv_stream == NULL)
+    state->priv_stream = state->input_stream;
+
+  while (state->priv_stream != state->input_stream)
+    nextChar(&state->priv_stream, &state->loc);
+
+  union {
+    int i;
+    const char* temp;
+  } u;
+  
+  for (u.temp = state->input_stream;
+    *state->input_stream == ' ' || *state->input_stream == '\t';
+    state->input_stream++); 
+  state->loc.col += (state->input_stream - u.temp);
+  state->priv_stream = state->input_stream;
   char input_char = *state->input_stream;
 
   /* End of file */
@@ -167,248 +305,91 @@ void getToken(CUPState *state, Loc *next) {
     return;
   }
 
-  /* Newline */
-  {
-    int i = newlineChar(state->input_stream, next);
-    if (i) {
-      state->input_stream += i;
-      state->type = T_NL;
-      return;
-    }
-  }
-
   /* String literals */
   if (input_char == '"') {
-    next->col++;
+    state->type = T_STRING;
     state->loc.col++;
-    const char *temp = ++state->input_stream;
+    u.temp = ++state->input_stream;
     while (*state->input_stream != '\0' && *state->input_stream != '"') {
-      nextChar(state, next);
+      state->input_stream++;
     }
+    size_t len = state->input_stream - u.temp;
     if (*state->input_stream == '"')
       state->input_stream++;
-    size_t len = (state->input_stream - temp) - 1;
-    /* Check if string already exists in data pool */
-    if (state->data_size > len) {
-      const size_t size = state->data_size - len;
-      for (size_t i = state->data_size - len; i >= 0; i--) {
-        if (memcmp(state->data + i, temp, len) == 0) {
-          state->value = i;
-          state->type = T_STRING;
-          return;
-        }
-      }
-    }
-
-    /* Add new string to pool */
-    state->data =
-        (uint8_t *)state->reallocator(state->data, state->data_size + len + 1);
-    memcpy(state->data + state->data_size, temp, len);
-    state->data[state->data_size + len] = '\0';
-    state->data_size += len + 1;
-    state->type = T_STRING;
-    return;
-  }
-
-  /* Numbers */
-  if (input_char == '0' && zeroChar(state, state->input_stream + 1)) {
-    state->loc = start_loc;
-    state->type = T_NUMBER;
-    return;
-    /* Fall through to decimal parsing */
-  }
-
-  if (input_char >= '0' && input_char <= '9') {
-    while ((*state->input_stream >= '0' && *state->input_stream <= '9') ||
-           *state->input_stream == '_') {
-      if (*state->input_stream != '_')
-        state->value = state->value * 10 + (*state->input_stream - '0');
-      nextChar(*state->input_stream++, &state->loc);
-    }
-    state->loc = start_loc;
-    state->type = T_NUMBER;
-    return;
-  }
-
-  /* Operators that can be doubled (+=, ==, etc.) */
-  if (strchr("+-*/%&|<>^!=", input_char)) {
-    input_char = strindex("+-*/%&|<>^!=", input_char);
-    nextChar(*state->input_stream++, &state->loc);
-    if (*state->input_stream != '=') {
-      state->loc = start_loc;
-      state->type = types1[(uint8_t)input_char];
+    const uint8_t* i = getdata(state, u.temp, len);
+    if (i) {
+      state->nodes.value = i - state->data;
       return;
     }
-    nextChar(*state->input_stream++, &state->loc);
-    state->loc = start_loc;
-    state->type = doubles[(uint8_t)input_char];
+    state->data = (uint8_t*)cup_realloc(state->data, state->data_size + len + 1);
+    memcpy(state->data + state->data_size, u.temp, len);
+    state->data[state->data_size + len] = '\0';
+    state->data_size += len + 1;
     return;
   }
-
+  /* Numbers */
+  if (input_char == '0' && zeroChar(state, state->input_stream + 1)) {
+    state->type = T_NUMBER;
+    return;
+  }
+  if (input_char >= '0' && input_char <= '9') {
+    state->type = T_NUMBER;
+    state->nodes.value = numberChar(state);
+    return;
+  }
   /* Dot and range operator */
   if (input_char == '.') {
-    nextChar(*state->input_stream++, &state->loc);
-    if (*state->input_stream == '.') {
+    if (*(++state->input_stream) == '.') {
       if (state->input_stream[1] == '.') {
-        nextChar(*state->input_stream++, &state->loc);
-        nextChar(*state->input_stream++, &state->loc);
-        state->loc = start_loc;
+        state->input_stream += 2;
         state->type = T_VARG;
         return;
       }
     }
-    state->loc = start_loc;
     state->type = T_DOT;
     return;
   }
-
+  /* Newline */
+  u.i = newlineChar(state->input_stream);
+  if (u.i) {
+    state->input_stream += u.i;
+    state->type = T_NL;
+    return;
+  }
+  /* Operators that can be doubled (+=, ==, etc.) */
+  u.i = strindex("+-*/%&|<>^!=", input_char);
+  if (u.i != -1) {
+    if (*(++state->input_stream) != '=') {
+      state->type = types1[(uint8_t)input_char];
+      return;
+    }
+    state->type = doubles[(uint8_t)input_char];
+    return;
+  }
   /* Single-character delimiters */
-  if (strchr("(){}[].,:;#?@$\\~", input_char)) {
-    input_char = strindex("(){}[].,:;#?@$\\~", input_char);
-    nextChar(*state->input_stream++, &state->loc);
-    state->loc = start_loc;
+  u.i = strindex("(){}[].,:;#?@$\\~", input_char);
+  if (u.i != -1) {
+    state->input_stream++;
     state->type = types2[(uint8_t)input_char];
     return;
   }
-
   /* Keywords and identifiers */
-  const char *temp = state->input_stream;
-  do {
-    nextChar(*state->input_stream++, &state->loc);
-  } while (isID(*state->input_stream));
-  size_t len = state->input_stream - temp;
-  state->loc = start_loc;
-
-  /* Check for keywords */
-  if (len == 2 && memcmp(temp, "if", 2) == 0) {
-    state->type = T_IF;
-    return;
-  }
-  if (len == 3 && memcmp(temp, "for", 3) == 0) {
-    state->type = T_FOR;
-    return;
-  }
-  if (len == 4 && memcmp(temp, "else", 4) == 0) {
-    state->type = T_ELSE;
-    return;
-  }
-  if (len == 5 && memcmp(temp, "break", 5) == 0) {
-    state->type = T_BREAK;
-    return;
-  }
-  if (len == 5 && memcmp(temp, "while", 5) == 0) {
-    state->type = T_WHILE;
-    return;
-  }
-  if (len == 6 && memcmp(temp, "return", 6) == 0) {
-    state->type = T_RETURN;
-    return;
-  }
-  if (len == 8 && memcmp(temp, "continue", 8) == 0) {
-    state->type = T_CONTINUE;
-    return;
-  }
+  u.temp = state->input_stream;
+  for (state->input_stream++; isID(*state->input_stream); state->input_stream++);
+  size_t len = state->input_stream - u.temp;
 
   /* It's an identifier - intern it */
-  idToken(state, temp, len);
-  state->type = T_IDENTIFIER;
+  if (idToken(state, u.temp, len))
+    state->type = T_IDENTIFIER;
 }
 
 /**
- *  * @brief Skip whitespace and get next token
- *   * @param state Compiler state
- *    */
+ * @brief Skip whitespace and get next token
+ * @param state Compiler state
+ */
 void skipSpaces(CUPState *state) {
   while (*state->input_stream == ' ' || *state->input_stream == '\t' ||
          *state->input_stream == '\n' || *state->input_stream == '\r')
-    nextChar(*state->input_stream++, &state->loc);
+    nextChar(&state->input_stream, &state->loc);
   getToken(state);
-}
-
-/* ========================================================================== */
-/*                         STRING INTERNING                                   */
-/* ========================================================================== */
-
-/**
- *  * @brief Get string from interned string table
- *   * @param state Compiler state
- *    * @param index String index
- *     * @return Pointer to string or empty string if not found
- *      */
-const char *getString(CUPState *state, size_t index) {
-  if (state->names == NULL || index == SIZE_MAX)
-    return "";
-
-  /* Find the start sentinel [0, 0] */
-  uint8_t *ptr = state->names - 1;
-  while (ptr > state->names - 1000) { /* safety limit */
-    if (ptr[0] == '\0' && ptr[-1] == '\0') {
-      ptr++; /* Move to position after [0, 0] */
-      break;
-    }
-    ptr--;
-  }
-
-  /* Walk forward and count strings */
-  size_t current_index = 0;
-  while (ptr < state->names) {
-    if (*ptr == '\0') {
-      ptr++;
-      continue;
-    }
-    if (current_index == index)
-      return (const char *)ptr;
-    while (*ptr++)
-      ;
-    current_index++;
-  }
-
-  return NULL;
-}
-
-/**
- *  * @brief Intern identifier string
- *   * @param state Compiler state
- *    * @param str String to intern
- *     * @param len String length
- *      * @return Pointer to interned string
- *       */
-uint8_t *idToken(CUPState *state, const char *str, size_t len) {
-  uint8_t *current = state->names - 1;
-  state->value = 0;
-  uint8_t *keyword = NULL;
-
-  for (size_t l = 0;; current--) {
-    if (current[-1] != '\0') {
-      /* Found [non-0, X] continue to found [0, non-0](strings_start) */
-      l++;
-      continue;
-    }
-    if (*current == '\0') {
-      /* Found [0, 0] sentinel so keyword not found */
-      current--;
-      if (keyword == NULL) {
-        const size_t size = state->names - current;
-        state->names = (uint8_t *)state->reallocator(current, size + len + 1);
-        state->names += size;
-        keyword = state->names;
-        memcpy(state->names, str, len);
-        state->names[len] = '\0';
-        state->names += len + 1;
-      }
-      return keyword;
-    }
-    state->value++;
-    if (keyword == NULL) {
-      /* Found [0, non-0] strings_start */
-      if (l == len && memcmp(str, current, l) == 0) {
-        /* Match found and we need go to start */
-        keyword = current;
-        state->value = 0;
-      } else {
-        /* No match, continue to next keyword in backward order */
-        l = 0;
-      }
-    }
-  }
 }

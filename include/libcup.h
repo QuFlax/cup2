@@ -10,41 +10,84 @@
 #ifndef LIBCUP_H
 #define LIBCUP_H
 
-#include <stddef.h>
-#include <stdint.h>
-
-/* Type system constants */
-#define CUP_ERROR_CTYPE nullptr
-#define CUP_FILE_NOT_FOUND -2
-#define CUP_FILE_NOT_RECOGNIZED -3
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Error levels for diagnostic messages */
+#include <stddef.h>
+#include <stdint.h>
+#include <limits.h>
+
+#ifndef PAGESIZE
+#define PAGESIZE 4096
+#endif
+
+#define CUP_ERR_CTYPE NULL
+#define CUP_ERR_MOMORY -1
+#define CUP_ERR_STATE -2
+#define CUP_ERR_FILE_NOT_FOUND -3
+#define CUP_ERR_FILE_NOT_RECOGNIZED -4
+
+//TODO: CROSSCOMPILE STATIC/DLL(import)/SO
+#define CUP_API
+# define CUP_EXTERN extern CUP_API
+
 typedef enum {
-  CEL_INFO = 0, /**< Info messages (can be ignored)*/
-  CEL_WARN = 1, /**< Warning message */
-  CEL_ERRO = 2  /**< Error message */
-} CUPLogLevel;
+  CUP_TYPE_VOID,
+  CUP_TYPE_INT,
+	CUP_TYPE_FLOAT,
+	CUP_TYPE_DOUBLE,
+	CUP_TYPE_UINT8,
+	CUP_TYPE_SINT8,
+	CUP_TYPE_UINT16,
+	CUP_TYPE_SINT16,
+	CUP_TYPE_UINT32,
+	CUP_TYPE_SINT32,
+	CUP_TYPE_UINT64,
+	CUP_TYPE_SINT64,
+	CUP_TYPE_STRUCT,
+	CUP_TYPE_POINTER,
+  CUP_TYPE_ARRAY,
+  CUP_TYPE_FUNCTION,
+};
+typedef uint16_t CUP_TYPE;
 
-/** Function pointer for custom memory allocation */
-typedef void *(*CUPReallocFunc)(void *ptr, size_t size);
+typedef enum {
+  CUP_Level_INFO = 0, /**< Info messages (can be ignored)*/
+  CUP_Level_WARN = 1, /**< Warning message */
+  CUP_Level_ERRO = 2  /**< Error message */
+} CUP_LogLevel;
 
-/** Function pointer for custom error handling */
-typedef void (*CUPLogFunc)(CUPLogLevel level, const char *msg);
+typedef void *(*CUP_Realloc_Fn)(void *ptr, size_t size);
 
-/** Opaque handle to compiler state */
+CUP_Realloc_Fn* _cup_realloc(void);
+#define cup_realloc (*_cup_realloc())
+
+/**
+ * @brief Set custom memory allocator
+ * @param realloc_func Allocator function
+ */
+void cup_set_realloc(CUP_Realloc_Fn realloc_func);
+
+typedef void (*CUP_Log_Fn)(CUP_LogLevel level, const char *msg);
+
+CUP_Log_Fn* _cup_log(void);
+#define cup_log (*_cup_log())
+
+/**
+ * @brief Set custom error handler
+ * @param error_func Error handler function
+ */
+void cup_set_error_func(CUP_Log_Fn error_func);
+
 typedef struct CUPState CUPState;
 
 /**
  * @brief Create a new compiler state
- * @param realloc_func Custom allocator (NULL for default)
- * @param error_func Custom error handler (NULL for default)
+ * @param target Custom target generator (-1 for default)
  * @return New compiler state or NULL on failure
  */
-CUPState *cup_new(CUPReallocFunc *realloc_func, CUPLogFunc *error_func);
+CUPState *cup_new(int target);
 
 /**
  * @brief Destroy compiler state and free resources
@@ -52,116 +95,50 @@ CUPState *cup_new(CUPReallocFunc *realloc_func, CUPLogFunc *error_func);
  */
 void cup_delete(CUPState *state);
 
-/**
- * @brief Set custom error handler
- * @param state Compiler state
- * @param error_func Error handler function
- */
-void cup_set_error_func(CUPState *state, CUPLogFunc *error_func);
+typedef struct CUPModule CUPModule;
 
-/**
- * @brief Set custom memory allocator
- * @param state Compiler state
- * @param realloc_func Allocator function
- */
-void cup_set_realloc(CUPState *state, CUPReallocFunc *realloc_func);
+typedef void *(*CUPCodeGen)(CUPState *state, CUPModule* buf);
 
-void cup_set_ttable_size(CUPState *state, size_t size);
-size_t cup_get_ttable_size(CUPState *state);
-
-/** Supported target architectures */
-typedef enum {
-  CT_UNKNOWN = 0, /**< Unknown/unsupported architecture */
-  CT_X64 = 1      /**< x86-64 architecture */
+typedef struct CUPTarget {
+  char arch[8];
+  char os[8];
+  CUPCodeGen generator;
 } CUPTarget;
 
-/**
- * @brief Set target architecture
- * @param state Compiler state
- * @param type Target architecture
- */
-void cup_set_target(CUPState *state, CUPTarget target);
+CUPTarget* cup_get_target(size_t i);
+size_t cup_get_target_count();
 
 /* ========================================================================== */
 /*                              TYPE SYSTEM                                   */
 /* ========================================================================== */
 
-/** Opaque type handle */
-typedef struct CType CType;
+typedef struct _CUPType {
+  size_t size;
+  uint16_t alignment;
+  CUP_TYPE realtype;
+  union {
+    struct _CUPType** types;
+    struct _CUPType* type;
+  };
+} CUPType;
 
-/* Calling conventions */
-#define ABI_SYSV 1 /**< System V ABI (Linux/Unix x64) */
-#define ABI_MX64 2 /**< Microsoft x64 ABI (Windows) */
+CUP_EXTERN CUPType cup_type_void;
+CUP_EXTERN CUPType cup_type_uint8;
+CUP_EXTERN CUPType cup_type_sint8;
+CUP_EXTERN CUPType cup_type_uint16;
+CUP_EXTERN CUPType cup_type_sint16;
+CUP_EXTERN CUPType cup_type_uint32;
+CUP_EXTERN CUPType cup_type_sint32;
+CUP_EXTERN CUPType cup_type_uint64;
+CUP_EXTERN CUPType cup_type_sint64;
+CUP_EXTERN CUPType cup_type_float;
+CUP_EXTERN CUPType cup_type_double;
 
-#ifndef _WIN32
-#define ABI_DEFAULT ABI_SYSV
-#else
-#define ABI_DEFAULT ABI_MX64
-#endif
-
-/* Type construction functions */
-
-/**
- * @brief Get void type
- * @param state Compiler state
- * @return Void type or NULL on failure
- */
-const CType *cup_type_get_void(CUPState *state);
-
-/**
- * @brief Get numeric type
- * @param state Compiler state
- * @param size Size in bytes
- * @param issigned Whether type is signed
- * @return Number type or NULL on failure
- */
-const CType *cup_type_get_number(CUPState *state, uint8_t size, int issigned);
-
-/**
- * @brief Get double-precision floating point type
- * @param state Compiler state
- * @return Double type
- */
-const CType *cup_type_get_double(CUPState *state);
-
-/**
- * @brief Get pointer type
- * @param state Compiler state
- * @param ptrtype Pointed-to type
- * @return Pointer type
- */
-const CType *cup_type_get_pointer(CUPState *state, const CType *ptrtype);
-
-/**
- * @brief Get array type
- * @param state Compiler state
- * @param count Number of elements
- * @param ptrtype Element type
- * @return Array type
- */
-const CType *cup_type_get_array(CUPState *state, size_t count,
-                                const CType *ptrtype);
-
-/**
- * @brief Get complex/tuple type
- * @param state Compiler state
- * @param count Number of fields
- * @param types Array of field types
- * @return Complex type
- */
-const CType *cup_type_get_complex(CUPState *state, uint8_t count,
-                                  const CType **types);
-
-/**
- * @brief Get function type
- * @param state Compiler state
- * @param abi Calling convention
- * @param args Argument types (as complex type)
- * @param return_type Return type
- * @return Function type
- */
-const CType *cup_type_get_function(CUPState *state, uint8_t abi,
-                                   const CType *args, const CType *return_type);
+//const CUPType* cup_type_geti(CUPState *state, const size_t i);
+//void cup_type_put(CUPState *state, const char *key, CUPType value);
+//const CUPType *cup_type_get_pointer(CUPState *state, const CUPType *ptrtype);
+//const CUPType *cup_type_get_array(CUPState *state, size_t count, const CUPType *ptrtype);
+//const CUPType *cup_type_get_function(CUPState *state, CUPTarget* target, const CUPType *args, const CUPType *return_type);
 
 /* ========================================================================== */
 /*                           SYMBOL MANAGEMENT                                */
@@ -176,7 +153,7 @@ const CType *cup_type_get_function(CUPState *state, uint8_t abi,
  * @return 0 on success, -1 on error
  */
 int cup_add_symbol(CUPState *state, const char *name, void *val,
-                   const CType *type);
+                   const CUPType *type);
 
 /**
  * @brief Look up symbol by name
@@ -206,7 +183,13 @@ int cup_compile_string(CUPState *state, const char *source);
  */
 int cup_compile_file(CUPState *state, const char *filename);
 
-// int cup_output_file(CUPState *state, const char *filename);
+/**
+ * @brief Output object code from context
+ * @param state Compiler state
+ * @param filename Path to object file
+ * @return 0 on success, error code otherwise
+ */
+int cup_output_object(CUPState *state, const char *filename);
 
 #ifdef __cplusplus
 }

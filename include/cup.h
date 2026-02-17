@@ -1,18 +1,109 @@
+#ifndef CUP_H
+#define CUP_H
+
 #include "libcup.h"
+#include <assert.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+#define free(x) cup_realloc((x), 0)
+#define malloc(x) cup_realloc(NULL, x)
+#define callocT(v, T) do {v = malloc(sizeof(T)); memset(v, 0, sizeof(T));} while (0)
+
+const char *cup_vsprintf(const char *format, va_list args);
+const char *cup_sprintf(const char *format, ...);
+
+#if 0
+#define cup_warnf(state, f, ...)                                               \
+  do {                                                                         \
+    char *str = cup_sprintf((f), __VA_ARGS__);           \
+    cup_log(CUP_Level_WARN, str);                                               \
+    free(str);                                              \
+  } while (0)
+#define cup_warn(state, msg) cup_log(CUP_Level_WARN, msg);
+
+#define cup_errorf(state, f, ...)                                              \
+  do {                                                                         \
+    char *str = cup_sprintf((f), __VA_ARGS__);           \
+    cup_log(CUP_Level_ERRO, str);                                               \
+    free(str);                                              \
+  } while (0)
+#define cup_error(state, msg) cup_log(CUP_Level_ERRO, msg);
+#else
+#endif // CUP_ERROR_H
 
 /* ========================================================================== */
-/*                           CONFIGURATION                                    */
+/*                           DYNAMIC VECTORS                                  */
 /* ========================================================================== */
 
-#ifndef PAGESIZE
-#define PAGESIZE 4096
-#endif
+/** Dynamic array container */
+typedef struct CVector {
+  void *data;      /**< Pointer to data */
+  size_t count;
+  size_t capacity; /**< Allocated capacity in bytes */
+} CVector;
 
-/* Error codes */
-#define CUP_ERROR_FORMAT 3
-#define CUP_ERROR_MEM 2
-#define FILE_NOT_FOUND -2
-#define CUP_FILE_NOT_RECOGNIZED -3
+void vector_push(CVector *vec, const void *data, size_t size);
+void push_vector(CVector *dest, CVector src);
+void vector_fpush(CVector *vec, const void *data, size_t size);
+void fpush_vector(CVector *dest, CVector src);
+
+#define vector_pushT(left, data)  vector_push( (left),&(data),sizeof(data))
+#define vector_fpushT(left, data) vector_fpush((left),&(data),sizeof(data))
+
+/* ========================================================================== */
+/*                           HASH TABLE                                       */
+/* ========================================================================== */
+
+/* typedef struct _Entry {
+    char *key;
+    void* value;
+    struct _Entry *next;
+} Entry;
+*/
+
+/* typedef struct HashMap {
+    Entry **buckets;
+    size_t capacity;
+    size_t size;
+} HashMap;
+*/
+
+typedef struct VectorMap {
+    void *data;
+    size_t *indexs;
+    size_t capacity;
+    size_t count;
+} VectorMap;
+
+static unsigned long hash(const char *str) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+    }
+    return hash;
+}
+
+void hashmap_resize(VectorMap *map);
+void* hashmap_get(VectorMap map, const char *key);
+void hashmap_put(VectorMap *map, const char *key, void* value);
+void hashmap_free(VectorMap *map);
+
+/* ========================================================================== */
+/*                           VARIABLES & SCOPE                                */
+/* ========================================================================== */
+
+/** Variable definition */
+typedef struct CVariable {
+  const char *type;  /**< Variable type */
+  size_t name;       /**< Offset into name table */
+  size_t value;      /**< Variable value/address */
+} CVariable;
+
+/* ========================================================================== */
+/*                           AST NODES                                        */
+/* ========================================================================== */
 
 enum {
   T_EOF = '\0',
@@ -145,103 +236,12 @@ typedef union {
   Loc loc;
 } Token;
 
-/* ========================================================================== */
-/*                           DYNAMIC VECTORS                                  */
-/* ========================================================================== */
+const uint8_t* getdata(CUPState* state, const char* str, size_t len);
+const char *getString(CUPState *state, size_t index);
+uint8_t *idToken(CUPState *state, const char *str, size_t len);
 
-/** Dynamic array container */
-typedef struct {
-  size_t size;     /**< Current size in bytes */
-  size_t capacity; /**< Allocated capacity in bytes */
-  void *data;      /**< Pointer to data */
-} CVector;
-
-/* Vector operations */
-void vector_push(CVector *vec, const void *data, size_t size,
-                 CUPReallocFunc *realloc);
-void push_vector(CVector *dest, CVector src, CUPReallocFunc *realloc);
-void vector_fpush(CVector *vec, const void *data, size_t size,
-                  CUPReallocFunc *realloc);
-void fpush_vector(CVector *dest, CVector src, CUPReallocFunc *realloc);
-
-/* ========================================================================== */
-/*                           TYPE SYSTEM                                      */
-/* ========================================================================== */
-
-/** Number type flags */
-enum {
-  CTypeN_SIZE = 0,  /**< Size type (platform-dependent) */
-  CTypeN_UINT8 = 1, /**< 8-bit unsigned integer */
-  CTypeN_INT8 = 2   /**< 8-bit signed integer */
-};
-typedef uint8_t CTypeNType;
-
-/** Number type definition */
-typedef struct {
-  CTypeNType flags;
-} CTypeNumber;
-
-/** Function type definition */
-typedef struct {
-  const CType *return_type; /**< Function return type */
-  const CType *args;        /**< Function argument types */
-} CTypeFunc;
-
-/** Pointer type definition */
-typedef struct {
-  const CType *ptrtype; /**< Pointed-to type */
-} CTypePointer;
-
-/** Array type definition */
-typedef struct {
-  size_t count;         /**< Number of elements */
-  const CType *ptrtype; /**< Element type */
-} CTypeArray;
-
-/** Complex/tuple type definition */
-typedef struct {
-  size_t count;         /**< Number of fields */
-  const CType *types[]; /**< Field types */
-} CTypeComplex;
-
-/** Type categories */
-enum {
-  R_VOID = 0,
-  R_COMPLEX = 1,
-  R_NUMBER = 2,
-  R_DOUBLE = 3,
-  R_POINTER = 4,
-  R_ARRAY = 5,
-  R_FUNCTION = 6
-};
-typedef uint8_t CTypeR;
-
-/** Type structure */
-struct CType {
-  CTypeR type; /**< Type discriminator */
-  uint8_t data[sizeof(CTypeFunc)];
-};
-
-/** Type list node for type interning */
-typedef struct CTypeList {
-  struct CTypeList *next;
-  CType type;
-} CTypeList;
-
-/* ========================================================================== */
-/*                           VARIABLES & SCOPE                                */
-/* ========================================================================== */
-
-/** Variable definition */
-typedef struct {
-  const CType *type; /**< Variable type */
-  size_t name;       /**< Offset into name table */
-  size_t value;      /**< Variable value/address */
-} CVariable;
-
-/* ========================================================================== */
-/*                           AST NODES                                        */
-/* ========================================================================== */
+void getToken(CUPState *state);
+void skipSpaces(CUPState *state);
 
 /** AST node union */
 typedef union {
@@ -252,24 +252,81 @@ typedef union {
   double dvalue;
 } Node;
 
-/** Node array for AST traversal */
 typedef struct {
-  Node *nodes;  /**< Array of nodes */
-  size_t count; /**< Total node count */
-  size_t pos;   /**< Current position */
+  Node node;
+  union {
+    Node node2;
+    size_t value;
+  };
+} Node2;
+
+typedef struct {
+  Node *nodes;
+  size_t count;  
+  size_t pos;
 } Nodes;
+
+typedef struct {
+  size_t *var;
+  size_t ptr;
+} CRealloc;
+
+typedef struct {
+  CRealloc* reallocs;
+  size_t count;
+  size_t capacity;
+} CReallocs;
+
+typedef struct {
+  uint8_t *data;
+  size_t size;
+  size_t capacity;
+  CRealloc *reallocs;
+  size_t r_count;
+} CBuffer_;
 
 /* ========================================================================== */
 /*                           COMPILER STATE                                   */
 /* ========================================================================== */
 
-struct CUPState {
-  /* Memory management */
-  CUPReallocFunc *reallocator;
-  CUPLogFunc *error_func;
+typedef struct _CUPCompiledModule {
+  const char* path;
+  uint8_t* code;
+  size_t size;
+  size_t capacity;
+  CReallocs reallocs;
+  struct _CUPCompiledModule* next;
+} CUPCompiledModule;
 
+struct CUPModule {
+  const char* path;
+  uint8_t* code;
+  size_t size;
+  size_t capacity;
+  Nodes nodes;
+  CUPModule* next;
+};
+
+static_assert(sizeof(CUPModule) == (8 * sizeof(size_t)), "CUPModule size must be 8 bytes");
+
+typedef struct CUPVars {
+  CVariable *data;      /**< Pointer to data */
+  size_t size;     /**< Current size in bytes */
+  size_t capacity; /**< Allocated capacity in bytes */
+} CUPVars;
+
+typedef struct CUPTypes {
+  size_t* indexs;
+  CUPType* types;
+  size_t count;
+  size_t maxlen;
+} CUPTypes;
+
+
+struct CUPState {
   /* Source input */
   const char *input_stream;
+  const char *priv_stream;
 
   /* Parser state - uses union for efficient storage */
   union {
@@ -277,30 +334,25 @@ struct CUPState {
     Token token;
     CTType type;
     Loc loc;
-    struct {
-      Node node;
-      union {
-        size_t value;
-        Node node2;
-      };
-    };
+    Node node;
+    Node2 nodes;
   };
 
   /* Symbol table */
   uint8_t *names;   /**< String interning table */
   uint8_t *data;    /**< Additional data storage */
   size_t data_size; /**< Size of data storage */
-
-  /* Type system */
-  CTypeList *types; /**< Type interning list */
+  CUPModule* module;
 
   /* Variable and memory management */
-  CVector vars;  /**< Variable definitions */
-  CVector pages; /**< JIT memory pages */
+  CUPVars vars;  /**< Variable definitions */
 
-  /* Reserved for future use */
-  size_t ssss;
+  VectorMap types;
+
+  CUPTarget* target;
 };
 
 /* Ensure consistent memory layout */
-_Static_assert(sizeof(CUPState) == 128, "CUPState size must be 128 bytes");
+static_assert(sizeof(CUPState) == 128, "CUPState size must be 128 bytes");
+
+#endif /* CUP_H */

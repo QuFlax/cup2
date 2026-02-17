@@ -1,4 +1,4 @@
-typedef uint8_t X64Reg;
+#include "../../include/cup.h"
 enum {
   RAX = 0,
   RCX = 1,
@@ -17,10 +17,7 @@ enum {
   R14 = 14,
   R15 = 15
 };
-
-const char *X64Reg_names[16] = {"RAX", "RCX", "RDX", "RBX", "RSP", "RBP",
-                                "RSI", "RDI", "R8",  "R9",  "R10", "R11",
-                                "R12", "R13", "R14", "R15"};
+typedef uint8_t X64Reg;
 
 // Emit REX prefix for 64-bit operations
 static void emit_rex(CBuffer *buf, int w, X64Reg reg, X64Reg rm) {
@@ -196,43 +193,6 @@ static void emit_test_reg_reg(CBuffer *buf, X64Reg reg1, X64Reg reg2) {
   emit_rex(buf, true, reg1, reg2);
   emit8(buf, 0x85);
   emit_modrm(buf, 3, reg1, reg2);
-}
-
-// SETE/SETNE/SETL/SETLE/SETG/SETGE
-static void emit_set_condition(CBuffer *buf, CTType cond, X64Reg dst) {
-  // Clear destination register first
-  emit_rex(buf, false, dst, dst);
-  emit8(buf, 0x31);
-  emit8(buf, 0xC0 | ((dst & 7) << 3) | (dst & 7));
-
-  // Set byte based on condition
-  if (dst >= R8)
-    emit8(buf, 0x41);
-  emit8(buf, 0x0F);
-  switch (cond) {
-  case T_EQEQ:
-    emit8(buf, 0x94);
-    break; // SETE
-  case T_NOTEQ:
-    emit8(buf, 0x95);
-    break; // SETNE
-  case T_LESS:
-    emit8(buf, 0x9C);
-    break; // SETL
-  case T_LESSEQ:
-    emit8(buf, 0x9E);
-    break; // SETLE
-  case T_GREAT:
-    emit8(buf, 0x9F);
-    break; // SETG
-  case T_GREATEQ:
-    emit8(buf, 0x9D);
-    break; // SETGE
-  default:
-    emit8(buf, 0x94);
-    break;
-  }
-  emit8(buf, 0xC0 | (dst & 7));
 }
 
 // MOV [rbp+offset], reg (store variable)
