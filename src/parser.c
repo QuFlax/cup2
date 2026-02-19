@@ -11,7 +11,7 @@
 #endif
 
 const char* node_name(Node2 n) {
-
+  return "";
 }
 
 CUPModule* getModule(CUPState* state, const char* path) {
@@ -33,6 +33,9 @@ void externalModule(CUPState* state) {
 
 // vector_push_node
 // vector_pushT
+
+#define push_vector(a, b) push_vector(&a, b, sizeof(Node))
+#define fpush_vector(a, b) fpush_vector(&a, b, sizeof(Node))
 
 CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
   CVector left = {};
@@ -89,7 +92,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       size_t pos = 0;
       args_type = defType(state, (Node *)args_nodes.data, &pos, NULL);
     }
-    cup_error(state, "TODO: AT");
+    cup_error(state, "TODO: AT function");
     exit(1);
     if (state->type == T_NL)
       skipSpaces(state);
@@ -97,11 +100,13 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     ((CVariable *)vars.data)[v].type =
     cup_type_get_function(state, state->target, args_type, NULL);
 
-    fpush_vector(&state->vars, vars);
-    push_vector(&left, args_nodes);
+    //TODO: chgange  fpush_vector to add var
+    //fpush_vector(&state->vars, vars);
+
+    push_vector(left, args_nodes);
     { // statement
-      const CUPType *fn_t = (const CUPType *)hashmap_get(*state->types, state->vars.data[v].type);
-      push_vector(&left, primary(state, (const CUPType **)&fn_t->types[1], CUPDEFPOWER));
+      const CUPType *fn_t = (const CUPType *)hashmap_getv(state->types, state->vars.data[v].type);
+      push_vector(left, primary(state, (const CUPType **)&fn_t->types[1], CUPDEFPOWER));
       if (state->node.type == T_NL)
         skipSpaces(state);
     }
@@ -116,11 +121,11 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
   case T_WHILE: {
     vector_pushT(&left, state->node);
     skipSpaces(state);
-    push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(left, primary(state, return_type, CUPDEFPOWER));
     if (state->type == T_NL)
       skipSpaces(state);
     { // statement
-      push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+      push_vector(left, primary(state, return_type, CUPDEFPOWER));
       if (state->type == T_NL)
         skipSpaces(state);
       if (state->type == T_EOF)
@@ -145,7 +150,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       cup_error(state, "Return in not returnable expression");
       exit(1);
     }
-    push_vector(&left, right);
+    push_vector(left, right);
 
     if (return_type) {
       // const CType* type = defType(state, right);
@@ -162,13 +167,13 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     state->type = N_UNARY;
     vector_pushT(&left, state->node);
     getToken(state);
-    push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(left, primary(state, return_type, CUPDEFPOWER));
     break;
   }
   case T_NOT: {
     vector_pushT(&left, state->node);
     getToken(state);
-    push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(left, primary(state, return_type, CUPDEFPOWER));
     break;
   }
   case T_IDENTIFIER: {
@@ -216,7 +221,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     vector_pushT(&left, state->nodes);
     skipSpaces(state);
     if (state->type != T_CRB) {
-      push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+      push_vector(left, primary(state, return_type, CUPDEFPOWER));
       ((Node *)left.data)[1].value = 1;
     }
     if (state->type == T_NL)
@@ -231,7 +236,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     while (state->type != T_CCB) {
       { // statement
         CVector block = primary(state, return_type, CUPDEFPOWER);
-        push_vector(&left, block);
+        push_vector(left, block);
         if (state->type == T_NL)
           skipSpaces(state);
         if (state->type == T_EOF)
@@ -253,7 +258,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       CVector body = primary(state, return_type, CUPDEFPOWER);
       if (body.data)
         ((Node *)left.data)[1].value++;
-      push_vector(&left, body);
+      push_vector(left, body);
     }
     if (state->node.type == T_NL)
       skipSpaces(state);
@@ -263,11 +268,11 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
   case T_IF: {
     vector_pushT(&left, state->node);
     skipSpaces(state);
-    push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(left, primary(state, return_type, CUPDEFPOWER));
     if (state->node.type == T_NL)
       skipSpaces(state);
     { // statement
-      push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+      push_vector(left, primary(state, return_type, CUPDEFPOWER));
       if (state->node.type == T_NL)
         skipSpaces(state);
       if (state->node.type == T_EOF)
@@ -277,7 +282,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       vector_fpush_node(&left, &state->node);
       skipSpaces(state);
       { // statement
-        push_vector(&left, primary(state, return_type, CUPDEFPOWER));
+        push_vector(left, primary(state, return_type, CUPDEFPOWER));
         if (state->node.type == T_NL)
           skipSpaces(state);
         if (state->node.type == T_EOF)
@@ -338,7 +343,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       break;
     }
     case T_EQ: {
-      assert(right.size >= 1 && "Right size is small");
+      assert(right.count >= 1 && "Right size is small");
       {
         size_t pos = 0;
         const CUPType *rv = defType(state, (Node *)right.data, &pos, NULL);
@@ -346,7 +351,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
         defType(state, (Node *)left.data, &pos, rv);
       }
       vector_fpush_node(&right, &t);
-      fpush_vector(&left, right);
+      fpush_vector(left, right);
       continue;
     }
     case T_COMMA: {
@@ -371,7 +376,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       //cup_errorf(state, "primary op2: Unexpected token " NODEFMT, NODEFMTV(t));
       exit(1);
     }
-    push_vector(&left, right);
+    push_vector(left, right);
   }
 }
 
@@ -397,7 +402,7 @@ void parse(CUPState *state, const char* buf, const char* file) {
     CVector n = primary(state, &type, CUPDEFPOWER);
     size_t pos = 0;
     defType(state, (Node *)n.data, &pos, NULL);
-    push_vector(&nodes, n);
+    push_vector(nodes, n);
 
     if (state->type == T_NL)
       skipSpaces(state);

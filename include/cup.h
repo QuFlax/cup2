@@ -13,20 +13,20 @@
 const char *cup_vsprintf(const char *format, va_list args);
 const char *cup_sprintf(const char *format, ...);
 
-#if 0
+#if 1
 #define cup_warnf(state, f, ...)                                               \
   do {                                                                         \
-    char *str = cup_sprintf((f), __VA_ARGS__);           \
-    cup_log(CUP_Level_WARN, str);                                               \
-    free(str);                                              \
+    char *_ = cup_sprintf((f), __VA_ARGS__);           \
+    cup_log(CUP_Level_WARN, _);                                               \
+    free(_);                                              \
   } while (0)
 #define cup_warn(state, msg) cup_log(CUP_Level_WARN, msg);
 
 #define cup_errorf(state, f, ...)                                              \
   do {                                                                         \
-    char *str = cup_sprintf((f), __VA_ARGS__);           \
-    cup_log(CUP_Level_ERRO, str);                                               \
-    free(str);                                              \
+    char *_ = cup_sprintf((f), __VA_ARGS__);           \
+    cup_log(CUP_Level_ERRO, _);                                               \
+    free(_);                                              \
   } while (0)
 #define cup_error(state, msg) cup_log(CUP_Level_ERRO, msg);
 #else
@@ -43,10 +43,10 @@ typedef struct CVector {
   size_t capacity; /**< Allocated capacity in bytes */
 } CVector;
 
-void vector_push(CVector *vec, const void *data, size_t size);
-void push_vector(CVector *dest, CVector src);
-void vector_fpush(CVector *vec, const void *data, size_t size);
-void fpush_vector(CVector *dest, CVector src);
+void vector_push(CVector *vec, const void *data, size_t sizeT);
+void push_vector(CVector *dest, CVector src, size_t sizeT);
+void vector_fpush(CVector *vec, const void *data, size_t sizeT);
+void fpush_vector(CVector *dest, CVector src, size_t sizeT);
 
 #define vector_pushT(left, data)  vector_push( (left),&(data),sizeof(data))
 #define vector_fpushT(left, data) vector_fpush((left),&(data),sizeof(data))
@@ -55,25 +55,21 @@ void fpush_vector(CVector *dest, CVector src);
 /*                           HASH TABLE                                       */
 /* ========================================================================== */
 
-/* typedef struct _Entry {
-    char *key;
-    void* value;
-    struct _Entry *next;
-} Entry;
-*/
-
-/* typedef struct HashMap {
-    Entry **buckets;
-    size_t capacity;
-    size_t size;
-} HashMap;
-*/
+typedef struct VectorMapKey {
+  const char* key;
+  size_t i;
+} VectorMapKey;
 
 typedef struct VectorMap {
-    void *data;
-    size_t *indexs;
-    size_t capacity;
-    size_t count;
+  union {
+    CVector vec;
+    struct {
+      void *data;
+      size_t count;
+      size_t capacity;
+    };
+  };
+  VectorMapKey *keys;
 } VectorMap;
 
 static unsigned long hash(const char *str) {
@@ -85,9 +81,10 @@ static unsigned long hash(const char *str) {
     return hash;
 }
 
-void hashmap_resize(VectorMap *map);
+void hashmap_resize(VectorMap *map, size_t sizeT);
 void* hashmap_get(VectorMap map, const char *key);
-void hashmap_put(VectorMap *map, const char *key, void* value);
+void* hashmap_getv(VectorMap map, const void* value, size_t sizeT);
+void hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
 void hashmap_free(VectorMap *map);
 
 /* ========================================================================== */
@@ -96,7 +93,7 @@ void hashmap_free(VectorMap *map);
 
 /** Variable definition */
 typedef struct CVariable {
-  const char *type;  /**< Variable type */
+  size_t type;       /**< Variable type */
   size_t name;       /**< Offset into name table */
   size_t value;      /**< Variable value/address */
 } CVariable;

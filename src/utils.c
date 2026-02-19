@@ -1,4 +1,4 @@
-#include "../include/cup.h"
+#include "cup.h"
 #include <threads.h>
 #include <string.h>
 #include <stdarg.h>
@@ -85,96 +85,131 @@ const char *cup_vsprintf(const char *format, va_list args) {
   }
 }
 
-void vector_push(CVector *vec, const void *data, size_t size){
-  if (size == 0 || data == NULL)
+static void vector_res(CVector *vec, size_t newsize) {
+  if (vec == NULL || newsize == 0)
     return;
-  size_t newsize = vec->size + size;
   if (vec->capacity < newsize) {
     do {
-      vec->capacity = vec->capacity ? vec->capacity * 2 : 8;
+      vec->capacity = vec->capacity ? vec->capacity * 2 : sizeof(size_t);
     } while (vec->capacity < newsize);
     vec->data = cup_realloc(vec->data, vec->capacity);
   }
-  memcpy((char *)vec->data + vec->size, data, size);
-  vec->size += size;
 }
-void push_vector(CVector *dest, CVector src) {
-  vector_push(dest, src.data, src.size);
+static void vector_pushV(CVector *vec, const void *data, const size_t sizeT, size_t newcount) {
+  assert(sizeT > 0);
+  assert(data != NULL);
+  newcount *= sizeT;
+  vector_res(vec, newcount);
+  newcount -= sizeT;
+  memcpy((char *)vec->data + newcount, data, sizeT);
+}
+void vector_push(CVector *vec, const void *data, size_t sizeT) {
+  vector_pushV(vec, data, sizeT, ++vec->count);
+}
+void push_vector(CVector *dest, CVector src, size_t sizeT) {
+  vector_pushV(dest, src.data, src.count * sizeT, dest->count + src.count);
   if (src.data)
     free(src.data);
 }
-void vector_fpush(CVector *vec, const void *data, size_t size) {
+static void vector_fpushV(CVector *vec, const void *data, const size_t sizeT, size_t newcount) {
+  assert(sizeT > 0);
+  assert(data != NULL);
+  newcount *= sizeT;
   CVector new_vector = {};
-  vector_push(&new_vector, data, size);
-  push_vector(&new_vector, *vec);
+  size_t b = vec->count * sizeT;
+  vector_res(&new_vector, newcount + b);
+  memcpy((char *)new_vector.data,            data,      newcount);
+  memcpy((char *)new_vector.data + newcount, vec->data, b);
+  if (vec->data)
+    free(vec->data);
   memcpy(vec, &new_vector, sizeof(CVector));
 }
-void fpush_vector(CVector *dest, CVector src) {
-  vector_fpush(dest, src.data, src.size);
+void vector_fpush(CVector *vec, const void *data, size_t sizeT) {
+  vector_fpushV(vec, data, sizeT, 1);
+}
+void fpush_vector(CVector *dest, CVector src, size_t sizeT) {
+  vector_fpushV(dest, src.data, sizeT, src.count);
   if (src.data)
     free(src.data);
 }
-void hashmap_resize(VectorMap *map) {
-  size_t old_capacity = map->capacity;
-  Entry **old_buckets = map->buckets;
-  map->capacity *= 2;
-  map->buckets = cup_realloc(map->buckets, map->capacity * sizeof(Entry*));
-  memset(&map->buckets[old_capacity], 0, old_capacity);  
-  // Rehash all entries
-  Entry *entries_to_rehash[map->size];
-  size_t entry_count = 0;
-    
-  // Collect all entries
+
+void hashmap_resize(VectorMap *map, size_t sizeT) {
+  size_t old_capacity    = map->capacity / sizeT;
+  size_t new_capacity    = old_capacity * 2;
+  map->data              = cup_realloc(map->data, new_capacity * sizeT);
+  VectorMapKey *new_keys = malloc(new_capacity * sizeof(VectorMapKey));
+  memset(map->keys, 0, new_capacity * sizeof(VectorMapKey));
+  /* Rehash all existing keys */
   for (size_t i = 0; i < old_capacity; i++) {
-    Entry *entry = map->buckets[i];
-    map->buckets[i] = NULL;  // Clear old bucket
-    while (entry) {
-      Entry *next = entry->next;
-      entries_to_rehash[entry_count++] = entry;
-      entry = next;
+    if (map->keys[i].key) {
+      unsigned long h = hash(map->keys[i].key) % new_capacity;
+      while (new_keys[h].key) {
+        h = (h + 1) % new_capacity;
+      }
+      new_keys[h] = map->keys[i];
     }
   }
-    
-  // Reinsert all entries
-  for (size_t i = 0; i < entry_count; i++) {
-    Entry *entry = entries_to_rehash[i];
-    size_t index = hash(entry->key) % map->capacity;
-    entry->next = map->buckets[index];
-    map->buckets[index] = entry;
-  }
+  free(map->keys);
+  map->keys     = new_keys;
+  map->capacity = new_capacity * sizeT;
 }
-void* hashmap_get(HashMap map, const char *key) {
-  size_t index = hash(key) % map.capacity;
-  for (Entry *entry = map.buckets[index]; entry; entry = entry->next) {
-    if (entry->key == key || (strcmp(entry->key, key) == 0))
-      return entry->value;
+void* hashmap_get(VectorMap map, const char *key, size_t sizeT) {
+  if (!map.data || map.capacity == 0)
+    return NULL;
+  unsigned long h = hash(key) * sizeT % map.capacity, i;
+  i = h;
+  
+  do {
+    if (strcmp(map.keys[h].key, key) == 0) {
+      if (map.keys[h].i >= map.count)
+        return NULL;
+      return (char *)map.data + map.keys[h].i * sizeT;
+    }
+    h = (h + sizeT) % map.capacity;
   }
-  return CUP_ERR_CTYPE;
+  while (h != i);
+  return NULL;
 }
-void hashmap_put(HashMap *map, const char *key, void* value) {
-  if ((float)map->size / map->capacity > LOAD_FACTOR)
+void* hashmap_getv(VectorMap map, const void* value, size_t sizeT) {
+  if (!map.data || map.count == 0)
+    return NULL;
+  for (size_t i = 0; i < map.count; i++) {
+    void *slot = (char *)map.data + i * sizeT;
+    if (memcmp(slot, value, sizeT) == 0)
+      return slot;
+  }
+  return NULL;
+}
+void hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT) {
+  if (!map->data || map->capacity == 0) {
+    map->capacity = INITIAL_CAPACITY;
+    map->count    = 0;
+    map->data     = malloc(map->capacity * sizeT);
+    map->keys     = malloc(map->capacity * sizeof(VectorMapKey));
+    memset(map->keys, 0, map->capacity * sizeof(VectorMapKey));
+    map->capacity *= sizeT;
+  }
+  if (((double)(map->count + 1) * sizeT / (double)map->capacity) > LOAD_FACTOR) {
     hashmap_resize(map);
-  size_t index = hash(key) % map->capacity;
-  CUPType* e = hashmap_get(*map, key);
-  if (e) return;
-  Entry *new_entry = malloc(sizeof(Entry));
-  size_t len = strlen(key);
-  new_entry->key = malloc(len + 1);
-  memcpy(new_entry->key, key, len);
-  new_entry->value = value;
-  new_entry->next = map->buckets[index];
-  map->buckets[index] = new_entry;
-  map->size++;
-}
-void hashmap_destroy(HashMap *map) {
-  for (size_t i = 0; i < map->capacity; i++) {
-    for (Entry *entry = map->buckets[i]; entry; ) {
-      Entry *next = entry->next;
-      free(entry->key);
-      free(entry);
-      entry = next;
-    }
   }
-  free(map->buckets);
-  free(map);
+  unsigned long h = hash(key) % map->capacity;
+  void* v = hashmap_get(*map, key, sizeT);
+  if (v) {
+    memcpy(v, value, sizeT);
+    return;
+  }
+  /* Insert new entry */
+  size_t slot = map->count++;
+  memcpy((char *)map->data + slot * sizeT, value, sizeT);
+  map->keys[h].key = key;
+  map->keys[h].i   = slot;
+}
+void hashmap_free(VectorMap *map) {
+  if (!map) return;
+  free(map->data);
+  free(map->keys);
+  map->data     = NULL;
+  map->keys     = NULL;
+  map->count    = 0;
+  map->capacity = 0;
 }
