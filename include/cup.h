@@ -39,7 +39,7 @@ const char *cup_sprintf(const char *format, ...);
 /** Dynamic array container */
 typedef struct CVector {
   void *data;      /**< Pointer to data */
-  size_t count;
+  size_t size;
   size_t capacity; /**< Allocated capacity in bytes */
 } CVector;
 
@@ -57,7 +57,7 @@ void fpush_vector(CVector *dest, CVector src, size_t sizeT);
 
 typedef struct VectorMapKey {
   const char* key;
-  size_t i;
+  size_t offset;
 } VectorMapKey;
 
 typedef struct VectorMap {
@@ -82,9 +82,9 @@ static unsigned long hash(const char *str) {
 }
 
 void hashmap_resize(VectorMap *map, size_t sizeT);
-void* hashmap_get(VectorMap map, const char *key);
-void* hashmap_getv(VectorMap map, const void* value, size_t sizeT);
-void hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
+VectorMapKey* hashmap_get(VectorMap map, const char *key, size_t sizeT);
+VectorMapKey* hashmap_getv(VectorMap map, const void* value, size_t sizeT);
+VectorMapKey hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
 void hashmap_free(VectorMap *map);
 
 /* ========================================================================== */

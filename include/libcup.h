@@ -134,6 +134,22 @@ CUP_EXTERN CUPType cup_type_sint64;
 CUP_EXTERN CUPType cup_type_float;
 CUP_EXTERN CUPType cup_type_double;
 
+#define cup_type_struct(...) \
+    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
+        (CUPType*[]){ __VA_ARGS__, NULL } \
+    }
+#define cup_type_pointer(...) \
+    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
+        (CUPType*[]){ __VA_ARGS__, NULL } \
+    }
+#define cup_type_array(...) \
+    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
+        (CUPType*[]){ __VA_ARGS__, NULL } \
+    }
+#define cup_type_function(...) \
+    (CUPType){ sizeof(void*), sizeof(void*), CUP_TYPE_FUNCTION, \
+        (CUPType*[]){ __VA_ARGS__, NULL } \
+    }
 //const CUPType* cup_type_geti(CUPState *state, const size_t i);
 //void cup_type_put(CUPState *state, const char *key, CUPType value);
 //const CUPType *cup_type_get_pointer(CUPState *state, const CUPType *ptrtype);

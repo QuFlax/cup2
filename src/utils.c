@@ -85,7 +85,7 @@ const char *cup_vsprintf(const char *format, va_list args) {
   }
 }
 
-static void vector_res(CVector *vec, size_t newsize) {
+static void vector_resize(CVector *vec, size_t newsize) {
   if (vec == NULL || newsize == 0)
     return;
   if (vec->capacity < newsize) {
@@ -95,40 +95,37 @@ static void vector_res(CVector *vec, size_t newsize) {
     vec->data = cup_realloc(vec->data, vec->capacity);
   }
 }
-static void vector_pushV(CVector *vec, const void *data, const size_t sizeT, size_t newcount) {
+void vector_push(CVector *vec, const void *data, size_t sizeT) {
   assert(sizeT > 0);
   assert(data != NULL);
-  newcount *= sizeT;
-  vector_res(vec, newcount);
-  newcount -= sizeT;
-  memcpy((char *)vec->data + newcount, data, sizeT);
-}
-void vector_push(CVector *vec, const void *data, size_t sizeT) {
-  vector_pushV(vec, data, sizeT, ++vec->count);
+  vec->size += sizeT;
+  vector_resize(vec, vec->size);
+  memcpy((char *)vec->data + vec->size - sizeT, data, sizeT);
 }
 void push_vector(CVector *dest, CVector src, size_t sizeT) {
-  vector_pushV(dest, src.data, src.count * sizeT, dest->count + src.count);
+  vector_push(dest, src.data, src.size);
   if (src.data)
     free(src.data);
 }
-static void vector_fpushV(CVector *vec, const void *data, const size_t sizeT, size_t newcount) {
+void vector_fpush(CVector *vec, const void *data, size_t sizeT) {
   assert(sizeT > 0);
   assert(data != NULL);
-  newcount *= sizeT;
+#if 1
+  vector_res(&vec, vec->size + sizeT);
+  memmove(vec->data + sizeT, vec->data, vec->size);
+  memcpy(vec->data         , data,      sizeT);
+#else
   CVector new_vector = {};
-  size_t b = vec->count * sizeT;
-  vector_res(&new_vector, newcount + b);
-  memcpy((char *)new_vector.data,            data,      newcount);
-  memcpy((char *)new_vector.data + newcount, vec->data, b);
+  vector_res(&new_vector, sizeT + vec->size);
+  memcpy((char *)new_vector.data,            data,      sizeT);
+  memcpy((char *)new_vector.data + sizeT, vec->data, vec->size);
   if (vec->data)
     free(vec->data);
   memcpy(vec, &new_vector, sizeof(CVector));
-}
-void vector_fpush(CVector *vec, const void *data, size_t sizeT) {
-  vector_fpushV(vec, data, sizeT, 1);
+#endif
 }
 void fpush_vector(CVector *dest, CVector src, size_t sizeT) {
-  vector_fpushV(dest, src.data, sizeT, src.count);
+  vector_fpush(dest, src.data, src.size);
   if (src.data)
     free(src.data);
 }
@@ -153,7 +150,7 @@ void hashmap_resize(VectorMap *map, size_t sizeT) {
   map->keys     = new_keys;
   map->capacity = new_capacity * sizeT;
 }
-void* hashmap_get(VectorMap map, const char *key, size_t sizeT) {
+VectorMapKey* hashmap_get(VectorMap map, const char *key, size_t sizeT) {
   if (!map.data || map.capacity == 0)
     return NULL;
   unsigned long h = hash(key) * sizeT % map.capacity, i;
@@ -161,8 +158,9 @@ void* hashmap_get(VectorMap map, const char *key, size_t sizeT) {
   
   do {
     if (strcmp(map.keys[h].key, key) == 0) {
-      if (map.keys[h].i >= map.count)
+      if (map.keys[h].offset >= map.count)
         return NULL;
+      return &map.keys[h];
       return (char *)map.data + map.keys[h].i * sizeT;
     }
     h = (h + sizeT) % map.capacity;
@@ -170,7 +168,7 @@ void* hashmap_get(VectorMap map, const char *key, size_t sizeT) {
   while (h != i);
   return NULL;
 }
-void* hashmap_getv(VectorMap map, const void* value, size_t sizeT) {
+VectorMapKey* hashmap_getv(VectorMap map, const void* value, size_t sizeT) {
   if (!map.data || map.count == 0)
     return NULL;
   for (size_t i = 0; i < map.count; i++) {
@@ -180,7 +178,7 @@ void* hashmap_getv(VectorMap map, const void* value, size_t sizeT) {
   }
   return NULL;
 }
-void hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT) {
+VectorMapKey hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT) {
   if (!map->data || map->capacity == 0) {
     map->capacity = INITIAL_CAPACITY;
     map->count    = 0;
@@ -190,19 +188,23 @@ void hashmap_put(VectorMap *map, const char *key, const void* value, size_t size
     map->capacity *= sizeT;
   }
   if (((double)(map->count + 1) * sizeT / (double)map->capacity) > LOAD_FACTOR) {
-    hashmap_resize(map);
+    hashmap_resize(map, sizeT);
   }
   unsigned long h = hash(key) % map->capacity;
-  void* v = hashmap_get(*map, key, sizeT);
+  void* v = key ? hashmap_get(*map, key, sizeT) : hashmap_getv(*map, value, sizeT);
   if (v) {
     memcpy(v, value, sizeT);
-    return;
+    return {};
   }
   /* Insert new entry */
-  size_t slot = map->count++;
-  memcpy((char *)map->data + slot * sizeT, value, sizeT);
-  map->keys[h].key = key;
-  map->keys[h].i   = slot;
+  v = (char *)map->data + map->count * sizeT;
+  memcpy(v, value, sizeT);
+  if (key) {
+    map->keys[h].key = key;
+    map->keys[h].i   = map->count;
+  }
+  ++map->count;
+  return {};
 }
 void hashmap_free(VectorMap *map) {
   if (!map) return;

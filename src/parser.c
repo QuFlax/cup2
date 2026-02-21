@@ -97,7 +97,12 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     if (state->type == T_NL)
       skipSpaces(state);
 
-    ((CVariable *)vars.data)[v].type =
+    {
+      CUPType type = cup_type_function(args_type);
+      void* r= hashmap_put(&state->types, NULL, &type, sizeof(type));
+      
+    }
+      ((CVariable *)vars.data)[v].type =
     cup_type_get_function(state, state->target, args_type, NULL);
 
     //TODO: chgange  fpush_vector to add var
@@ -105,7 +110,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
 
     push_vector(left, args_nodes);
     { // statement
-      const CUPType *fn_t = (const CUPType *)hashmap_getv(state->types, state->vars.data[v].type);
+      const CUPType *fn_t = (const CUPType *)hashmap_getv(state->types, &state->vars.data[v].type, sizeof(state->vars.data[v].type));
       push_vector(left, primary(state, (const CUPType **)&fn_t->types[1], CUPDEFPOWER));
       if (state->node.type == T_NL)
         skipSpaces(state);
