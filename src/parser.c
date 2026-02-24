@@ -31,11 +31,207 @@ void externalModule(CUPState* state) {
 
 }
 
-// vector_push_node
-// vector_pushT
+char *cup_type_name(CUPState *state, const CUPType * type) {
+  if (!state) {
+    cup_error("cup_type_name: state is NULL")
+    return cup_strdup(CFE);
+  }
+  if (!type) {
+    cup_error("cup_type_name: type is NULL")
+    return cup_strdup(CFE);
+  }
+  switch (type->realtype) {
+  case CUP_TYPE_VOID: return cup_strdup("void"); break;
+  case CUP_TYPE_INT: return cup_strdup("int"); break;
+	case CUP_TYPE_FLOAT: return cup_strdup("float"); break;
+	case CUP_TYPE_DOUBLE: return cup_strdup("double"); break;
+	case CUP_TYPE_UINT8: return cup_strdup("uint8"); break;
+	case CUP_TYPE_SINT8: return cup_strdup("int8"); break;
+	case CUP_TYPE_UINT16: return cup_strdup("uint16"); break;
+	case CUP_TYPE_SINT16: return cup_strdup("int16"); break;
+	case CUP_TYPE_UINT32: return cup_strdup("uint32"); break;
+	case CUP_TYPE_SINT32: return cup_strdup("int32"); break;
+	case CUP_TYPE_UINT64: return cup_strdup("uint64"); break;
+	case CUP_TYPE_SINT64: return cup_strdup("int64"); break;
+	case CUP_TYPE_STRUCT: {
+    char* name = cup_strdup("{");
+    for (const CUPType** it = type->types; *it; it++) {
+      char* itname = cup_type_name(state, *it);
+      char* new_name = (it != type->types) ?
+        cup_sprintf("%s,%s", name, itname):
+        cup_sprintf("%s%s", name, itname);
+      free(name);
+      free(itname);
+      name = new_name;
+    }
+    char* new_name = cup_sprintf("%s}", name);
+    free(name);
+    return new_name;
+  }
+  break;
+	case CUP_TYPE_POINTER: {
+    char* name = cup_type_name(state, type->type);
+    char* new_name = cup_sprintf("%s*", name);
+    free(name);
+    return new_name;
+  }
+  break;
+  case CUP_TYPE_ARRAY: {
+    char* name = cup_type_name(state, type->type);
+    char* new_name = cup_sprintf("[%s]", name);
+    free(name);
+    return new_name;
+  }
+  break;
+  case CUP_TYPE_FUNCTION: {
+    const CUPType** it = type->types;
+    char* name = cup_type_name(state, *(it++));
+    char* new_name = cup_sprintf("%s(", name);
+    free(name);
+    name = new_name;
+    for (; *it; it++) {
+      char* itname = cup_type_name(state, *it);
+      new_name = cup_sprintf("%s,%s", name, itname);
+      free(name);
+      free(itname);
+      name = new_name;
+    }
+    new_name = cup_sprintf("%s)", name);
+    free(name);
+    return new_name;
+  }
+  break;
+  }
+  cup_error("cup_type_name: UNREACHEABLE")
+  return cup_strdup(CFE);
+}
 
-#define push_vector(a, b) push_vector(&a, b, sizeof(Node))
-#define fpush_vector(a, b) fpush_vector(&a, b, sizeof(Node))
+const CUPType *defType(CUPState *state, const Node *nodes, size_t *pos, const CUPType *value) {
+  (void)value;
+  if (nodes == NULL)
+    return NULL;
+  assert(pos != NULL);
+  Node n = nodes[(*pos)++];
+  const CUPType *left, *right;
+  switch (n.type) {
+  default:
+    cup_errorf(state, "defType UNKNOWN node make for " "NODEFMT", NODEFMTV(n));
+    return NULL;
+  case N_ADD:
+  case N_SUB:
+  case N_MUL:
+  case N_DIV:
+  case N_MOD: {
+    left = defType(state, nodes, pos, NULL);
+    right = defType(state, nodes, pos, NULL);
+
+    if (left == right)
+      return left;
+    cup_error("defType left and right are not compariable");
+    break;
+  }
+  case N_ASSIGN:
+  case N_ADDASSIGN:
+  case N_SUBASSIGN:
+  case N_MULASSIGN:
+  case N_DIVASSIGN: {
+    right = defType(state, nodes, pos, NULL);
+    return defType(state, nodes, pos, right);
+  }
+  case N_CALL: {
+    const CUPType *func_type = defType(state, nodes, pos, NULL);
+    const CUPType *args = defType(state, nodes, pos, NULL);
+    cup_errorf(state, "defType CALL %s %s", CType_name(func_type),
+               CType_name(args));
+    if (func_type && func_type->realtype == CUP_TYPE_FUNCTION) {
+      return func_type->types[0];
+    }
+    cup_error("getType call not Function");
+    return NULL;
+  }
+  case N_COMMA: {
+    size_t count = nodes[(*pos)++].value;
+    if (count >= UINT8_MAX)
+      break;
+    const CUPType **types;
+    calloc(types, sizeof(*types) * (count+1));
+    CUPType t = {0, 0, CUP_TYPE_STRUCT, types};
+    for (size_t i = 0; i < count; i++) {
+      types[i] = defType(state, nodes, pos, NULL);
+      if (t.alignment < types[i]->alignment)
+        t.alignment = types[i]->alignment;
+      t.size += types[i]->size;
+    }
+    char* name = cup_type_name(state, &t);
+    void* v = hashmap_get(state->types, name);
+    if (!v)
+      v = hashmap_put(&state->types, name, &t, sizeof(t));
+    free(name);
+    free(types);
+    return v;
+  }
+  case N_NUMBER: {
+    (*pos)++;
+    CUPType t = {sizeof(size_t), sizeof(size_t), CUP_TYPE_SINT64, NULL};
+    char* name = cup_type_name(state, &t);
+    void* v = hashmap_get(state->types, name);
+    if (!v)
+      v = hashmap_put(&state->types, name, &t, sizeof(t));
+    free(name);
+    return v;
+  }
+  case N_DOUBLE: {
+    (*pos)++;
+    CUPType t = {sizeof(double), sizeof(double), CUP_TYPE_DOUBLE, NULL};
+    char* name = cup_type_name(state, &t);
+    void* v = hashmap_get(state->types, name);
+    if (!v)
+      v = hashmap_put(&state->types, name, &t, sizeof(t));
+    free(name);
+    return v;
+  }
+  case N_STRING:
+  case N_MSTRING: {
+    (*pos)++;
+    //TODO: array with size
+    return NULL;
+  }
+  case N_VARIABLE: {
+    n = nodes[(*pos)++];
+    n.value = getScopeVar(state, n.value);
+    if (n.value == SIZE_MAX)
+      break;
+    CVariable *var = &(((CVariable *)state->vars.data)[n.value]);
+    if (value) {
+      if (var->type != value) {
+        if (var->type) {
+          cup_errorf(state, "defType value VAR %s = %s", CType_name(var->type),
+                     CType_name(value));
+          exit(1);
+        }
+        var->type = value;
+      }
+      return value;
+    }
+    return var->type;
+  }
+  case N_UNARY:
+  case N_RETURN:
+  case N_FUNCTION: {
+    (*pos)++;
+    if (value)
+      goto err;
+    return defType(state, nodes, pos, nullptr);
+  }
+  }
+
+err:
+  cup_errorf(state, "defType value " NODEFMT, NODEFMTV(n));
+  return nullptr;
+}
+
+//#define push_vector(a, b) push_vector(&a, b, sizeof(CVector))
+//#define fpush_vector(a, b) fpush_vector(&a, b, sizeof(Node))
 
 CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
   CVector left = {};
@@ -100,7 +296,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     {
       CUPType type = cup_type_function(args_type);
       void* r= hashmap_put(&state->types, NULL, &type, sizeof(type));
-      
+
     }
       ((CVariable *)vars.data)[v].type =
     cup_type_get_function(state, state->target, args_type, NULL);
@@ -388,7 +584,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
 void parse(CUPState *state, const char* buf, const char* file) {
   CUPModule* m = getModule(state, file);
   if (m == NULL) {
-    callocT(m, CUPModule);
+    calloc(m, sizeof(CUPModule));
     m->path = file;
     m->next = state->module;
     state->module = m;
@@ -472,8 +668,8 @@ void parse(CUPState *state, const char* buf, const char* file) {
 CUPState *cup_new(int target) {
   (void)target;
   CUPState* state;
-  callocT(state, CUPState);
-  callocT(state->names, uint16_t);
+  calloc(state, sizeof(CUPState));
+  calloc(state->names, sizeof(uint8_t) * 2);
   state->names += 2;
   return state;
 }

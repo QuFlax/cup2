@@ -138,17 +138,17 @@ CUP_EXTERN CUPType cup_type_double;
     (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
         (CUPType*[]){ __VA_ARGS__, NULL } \
     }
-#define cup_type_pointer(...) \
-    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
-        (CUPType*[]){ __VA_ARGS__, NULL } \
+#define cup_type_pointer(type) \
+    (CUPType){ 0, 0, CUP_TYPE_POINTER, \
+        (CUPType*[]){ type, NULL } \
     }
-#define cup_type_array(...) \
-    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
-        (CUPType*[]){ __VA_ARGS__, NULL } \
+#define cup_type_array(type) \
+    (CUPType){ 0, 0, CUP_TYPE_ARRAY, \
+        (CUPType*[]){ type, NULL } \
     }
-#define cup_type_function(...) \
+#define cup_type_function(args) \
     (CUPType){ sizeof(void*), sizeof(void*), CUP_TYPE_FUNCTION, \
-        (CUPType*[]){ __VA_ARGS__, NULL } \
+        (CUPType*[]){ args, NULL } \
     }
 //const CUPType* cup_type_geti(CUPState *state, const size_t i);
 //void cup_type_put(CUPState *state, const char *key, CUPType value);

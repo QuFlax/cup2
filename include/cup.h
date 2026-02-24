@@ -7,11 +7,13 @@
 #include <stdarg.h>
 
 #define free(x) cup_realloc((x), 0)
-#define malloc(x) cup_realloc(NULL, x)
-#define callocT(v, T) do {v = malloc(sizeof(T)); memset(v, 0, sizeof(T));} while (0)
+#define malloc(x) cup_realloc(NULL, (x))
+#define calloc(v, size) do {v = malloc((size)); memset(v, 0, (size));} while (0)
 
 const char *cup_vsprintf(const char *format, va_list args);
 const char *cup_sprintf(const char *format, ...);
+const char *cup_strdup(const char *str);
+extern const char* CFE;
 
 #if 1
 #define cup_warnf(state, f, ...)                                               \
@@ -20,7 +22,7 @@ const char *cup_sprintf(const char *format, ...);
     cup_log(CUP_Level_WARN, _);                                               \
     free(_);                                              \
   } while (0)
-#define cup_warn(state, msg) cup_log(CUP_Level_WARN, msg);
+#define cup_warn(msg) cup_log(CUP_Level_WARN, (msg));
 
 #define cup_errorf(state, f, ...)                                              \
   do {                                                                         \
@@ -28,7 +30,7 @@ const char *cup_sprintf(const char *format, ...);
     cup_log(CUP_Level_ERRO, _);                                               \
     free(_);                                              \
   } while (0)
-#define cup_error(state, msg) cup_log(CUP_Level_ERRO, msg);
+#define cup_error(msg) cup_log(CUP_Level_ERRO, (msg));
 #else
 #endif // CUP_ERROR_H
 
@@ -61,19 +63,16 @@ typedef struct VectorMapKey {
 } VectorMapKey;
 
 typedef struct VectorMap {
-  union {
-    CVector vec;
-    struct {
-      void *data;
-      size_t count;
-      size_t capacity;
-    };
-  };
+  void *data;
+  size_t count;
+  size_t capacity;
   VectorMapKey *keys;
 } VectorMap;
 
-static unsigned long hash(const char *str) {
-    unsigned long hash = 5381;
+typedef unsigned long hash_t;
+
+static hash_t hash(const char *str) {
+    hash_t hash = 5381;
     int c;
     while ((c = *str++)) {
         hash = ((hash << 5) + hash) + c; // hash * 33 + c
@@ -82,9 +81,9 @@ static unsigned long hash(const char *str) {
 }
 
 void hashmap_resize(VectorMap *map, size_t sizeT);
-VectorMapKey* hashmap_get(VectorMap map, const char *key, size_t sizeT);
-VectorMapKey* hashmap_getv(VectorMap map, const void* value, size_t sizeT);
-VectorMapKey hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
+VectorMapKey* hashmap_get_keyslot(VectorMap map, const char *key, size_t sizeT);
+void* hashmap_get(VectorMap map, const char *key);
+void* hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
 void hashmap_free(VectorMap *map);
 
 /* ========================================================================== */
