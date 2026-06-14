@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run CUP Compiler",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/cup",
+            "args": ["test.txt"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb"
+        },
+        {
+            "name": "Debug CUP Compiler",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/cup",
+            "args": ["test.txt"],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "/build/": "${workspaceFolder}"
+            },
+            "terminal": "integrated",
+            "stopOnEntry": false,
+            "breakpointMode": "file"
+        },
+        {
+            "name": "Debug Parser Only",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/cup",
+            "args": ["--parse-only", "test.txt"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Attach to Process",
+            "type": "lldb",
+            "request": "attach",
+            "pid": "${command:pickProcess}"
+        }
+    ]
+}

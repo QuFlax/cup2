@@ -1,245 +1,467 @@
-#define CUP_ERROR_H
 #include "../include/cup.h"
-#include <threads.h>
-#include <stdio.h>
-#include <string.h>
+//#include <threads.h>
+#include <math.h> // for pow, floor, log10
+#include <sys/stat.h>
+#include <sys/mman.h>
+
+//#include <dlfcn.h>
+//#include <libelf.h>
+
+#define DEBUG_LOG 0
+
+void* allocMemory(size_t size) {
+#ifdef _WIN32
+  void* ptr = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (!ptr) {
+    fprintf(stderr, "VirtualAlloc failed: %lu\n", GetLastError());
+    exit(1);
+  }
+  return ptr;
+#else
+  void* mem = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mem != MAP_FAILED)
+    return mem;
+  perror("mmap failed");
+  exit(1);
+#endif
+}
+
+static int samefile(const char* a, const char* b) {
+#if 0
+  //TODO: windows stuf
+  return 0;
+#else
+  if (!a || a[0] == '0' || !b || *b == '0') return 0;
+  struct stat sa, sb;
+  if (stat(a, &sa) != 0 || stat(b, &sb) != 0) return 0;
+  return (sa.st_ino == sb.st_ino) && (sa.st_dev == sb.st_dev);
+#endif
+}
 
 #define CUPDEFPOWER 2
 
 #ifndef CUPMAXTYPES
-#define CUPMAXTYPES 1024
+#define CUPMAXTYPES 256
 #endif
 
-const char* node_name(Node2 n) {
-  return "";
+
+void* cup_var_value(CVariable* var) {
+  if (var == NULL)
+    return NULL;
+  return (void*)var->value;
+}
+const char*    cup_var_name(CUPState* state, CVariable* var) {
+  if (state == NULL || var == NULL)
+    return NULL;
+  return getString(state, var->name);
+}
+const CUPType* cup_var_type(CUPState* state, const CVariable* var) {
+  if (state == NULL || var == NULL)
+    return NULL;
+  if (var->type == NULL)
+    return NULL;
+  return cup_type_put(state, (CUPType*)var->type);
 }
 
-CUPModule* getModule(CUPState* state, const char* path) {
-  for (CUPModule* m = state->module; m; m = m->next) {
-    if (m->path == path) return m;
-  }
-  return NULL;
+Nodes primary(CUPState *state, const CUPType **return_type, uint8_t mpower);
+
+Nodes statement(CUPState *state, const CUPType** rtype) {
+  Nodes n = primary(state, rtype, CUPDEFPOWER);
+  if (state->type == T_NL)
+    skipSpaces(state);
+  return n;
 }
+
+static CVariable* getScopeVar(CUPState *state, size_t name) {
+  //if (name == SIZE_MAX) return SIZE_MAX;
+  return symmap_get(&state->symmap, name);
+}
+
+// Names
+#define DEF(name) #name,
+const char *token_names[] = {
+#include "token.h"
+};
+#undef DEF
+
+#define expectAndNext(ntype)                                                   \
+  do {                                                                         \
+    if (state->type != ntype) {                                                \
+      cup_errorf("Expected " #ntype ", but got %s", token_names[state->type]); \
+      exit(1);                                                                 \
+    }                                                                          \
+    getToken(state);                                                           \
+  } while (0)
 
 void importModule(CUPState* state) {
-  const char* input_stream = state->input_stream;
+  //CUPState copy;
+  //memcpy(&copy, state, sizeof(CUPState));
+  const char* name = getString(state, state->nodes.value);
+  if (cup_compile_file(state, name))
+    cup_errorf("Load module '%s'", name);
+    
+  //vector_pushT(left, state->nodes);
+  //getToken(state);
 
-  state->input_stream = input_stream;
+  //state->input_stream = input_stream;
 }
 
 void externalModule(CUPState* state) {
+  const char* name = getString(state, state->nodes.value);
+  char temp[2048] = {0};
+  strncpy(temp, name, sizeof(temp));
+  char* dot = strrchr(temp, '.');
+  if (!dot || (dot && strcmp(dot, ".so")))
+      strcat(temp, ".so");
 
+  /*void *handle = dlopen(temp, RTLD_LAZY); // "./libmylib.so"
+  if (!handle) {
+    printf("Error: %s\n", dlerror());
+    return 1;
+  }
+  dlerror(); // Clear any existing error
+
+  int (*add_func)(int, int) = dlsym(handle, "add");
+  printf("2 + 3 = %d\n", add_func(2, 3));
+
+  dlclose(handle);*/
+  return;
 }
 
-char *cup_type_name(CUPState *state, const CUPType * type) {
-  if (!state) {
-    cup_error("cup_type_name: state is NULL")
-    return cup_strdup(CFE);
-  }
-  if (!type) {
-    cup_error("cup_type_name: type is NULL")
-    return cup_strdup(CFE);
-  }
-  switch (type->realtype) {
-  case CUP_TYPE_VOID: return cup_strdup("void"); break;
-  case CUP_TYPE_INT: return cup_strdup("int"); break;
-	case CUP_TYPE_FLOAT: return cup_strdup("float"); break;
-	case CUP_TYPE_DOUBLE: return cup_strdup("double"); break;
-	case CUP_TYPE_UINT8: return cup_strdup("uint8"); break;
-	case CUP_TYPE_SINT8: return cup_strdup("int8"); break;
-	case CUP_TYPE_UINT16: return cup_strdup("uint16"); break;
-	case CUP_TYPE_SINT16: return cup_strdup("int16"); break;
-	case CUP_TYPE_UINT32: return cup_strdup("uint32"); break;
-	case CUP_TYPE_SINT32: return cup_strdup("int32"); break;
-	case CUP_TYPE_UINT64: return cup_strdup("uint64"); break;
-	case CUP_TYPE_SINT64: return cup_strdup("int64"); break;
-	case CUP_TYPE_STRUCT: {
-    char* name = cup_strdup("{");
-    for (const CUPType** it = type->types; *it; it++) {
-      char* itname = cup_type_name(state, *it);
-      char* new_name = (it != type->types) ?
-        cup_sprintf("%s,%s", name, itname):
-        cup_sprintf("%s%s", name, itname);
-      free(name);
-      free(itname);
-      name = new_name;
+CUP_TYPE commonType(CUPType left, CUPType right) {
+  if (left.realtype == right.realtype) {
+    if (left.realtype == CUP_TYPE_STRUCT) {
+      if (left.size != right.size) {
+        cup_error("commonType: struct size mismatch");
+        return CUP_TYPE_VOID;
+      }
+      for (size_t i = 0; left.elements[i] && right.elements[i]; i++) {
+        if (left.elements[i] != right.elements[i]) {
+          cup_error("commonType: struct element type mismatch");
+          return CUP_TYPE_VOID;
+        }
+      }
     }
-    char* new_name = cup_sprintf("%s}", name);
-    free(name);
-    return new_name;
-  }
-  break;
-	case CUP_TYPE_POINTER: {
-    char* name = cup_type_name(state, type->type);
-    char* new_name = cup_sprintf("%s*", name);
-    free(name);
-    return new_name;
-  }
-  break;
-  case CUP_TYPE_ARRAY: {
-    char* name = cup_type_name(state, type->type);
-    char* new_name = cup_sprintf("[%s]", name);
-    free(name);
-    return new_name;
-  }
-  break;
-  case CUP_TYPE_FUNCTION: {
-    const CUPType** it = type->types;
-    char* name = cup_type_name(state, *(it++));
-    char* new_name = cup_sprintf("%s(", name);
-    free(name);
-    name = new_name;
-    for (; *it; it++) {
-      char* itname = cup_type_name(state, *it);
-      new_name = cup_sprintf("%s,%s", name, itname);
-      free(name);
-      free(itname);
-      name = new_name;
+    if (left.realtype == CUP_TYPE_FUNCTION) {
+      if (left.size != right.size) {
+        cup_error("commonType: function size mismatch");
+        return CUP_TYPE_VOID;
+      }
+      for (size_t i = 0; left.elements[i] && right.elements[i]; i++) {
+        CUP_TYPE t = commonType(*left.elements[i], *right.elements[i]);
+        if (t != CUP_TYPECOUNT) {
+          cup_error("commonType function element type mismatch");
+          return t;
+        }
+      }
     }
-    new_name = cup_sprintf("%s)", name);
-    free(name);
-    return new_name;
+    return CUP_TYPECOUNT;
   }
-  break;
-  }
-  cup_error("cup_type_name: UNREACHEABLE")
-  return cup_strdup(CFE);
+  if (left.realtype == CUP_TYPE_VOID)
+    return right.realtype;
+  if (right.realtype == CUP_TYPE_VOID)
+    return left.realtype;
+  if ((left.realtype == CUP_TYPE_FLOAT && right.realtype == CUP_TYPE_DOUBLE) ||
+      (left.realtype == CUP_TYPE_DOUBLE && right.realtype == CUP_TYPE_FLOAT))
+    return CUP_TYPE_DOUBLE;
+  if ((left.realtype == CUP_TYPE_SINT64 && right.realtype == CUP_TYPE_UINT64) ||
+      (left.realtype == CUP_TYPE_UINT64 && right.realtype == CUP_TYPE_SINT64))
+    return CUP_TYPE_UINT64;
+  if ((left.realtype == CUP_TYPE_SINT32 && right.realtype == CUP_TYPE_UINT32) ||
+      (left.realtype == CUP_TYPE_UINT32 && right.realtype == CUP_TYPE_SINT32))
+    return CUP_TYPE_UINT32;
+  if ((left.realtype == CUP_TYPE_SINT16 && right.realtype == CUP_TYPE_UINT16) ||
+      (left.realtype == CUP_TYPE_UINT16 && right.realtype == CUP_TYPE_SINT16))
+    return CUP_TYPE_UINT16;
+  if ((left.realtype == CUP_TYPE_SINT8 && right.realtype == CUP_TYPE_UINT8) ||
+      (left.realtype == CUP_TYPE_UINT8 && right.realtype == CUP_TYPE_SINT8))
+    return CUP_TYPE_UINT8;
+  if ((left.realtype == CUP_TYPE_SINT64 && right.realtype == CUP_TYPE_SINT32) ||
+      (left.realtype == CUP_TYPE_SINT32 && right.realtype == CUP_TYPE_SINT64))
+    return CUP_TYPE_SINT64;
+  if ((left.realtype == CUP_TYPE_SINT64 && right.realtype == CUP_TYPE_SINT16) ||
+      (left.realtype == CUP_TYPE_SINT16 && right.realtype == CUP_TYPE_SINT64))
+    return CUP_TYPE_SINT64;
+  if ((left.realtype == CUP_TYPE_SINT64 && right.realtype == CUP_TYPE_SINT8) ||
+      (left.realtype == CUP_TYPE_SINT8 && right.realtype == CUP_TYPE_SINT64))
+    return CUP_TYPE_SINT64;
+  if ((left.realtype == CUP_TYPE_SINT32 && right.realtype == CUP_TYPE_SINT16) ||
+      (left.realtype == CUP_TYPE_SINT16 && right.realtype == CUP_TYPE_SINT32))
+    return CUP_TYPE_SINT32;
+  if ((left.realtype == CUP_TYPE_SINT32 && right.realtype == CUP_TYPE_SINT8) ||
+      (left.realtype == CUP_TYPE_SINT8 && right.realtype == CUP_TYPE_SINT32))
+    return CUP_TYPE_SINT32;
+  if ((left.realtype == CUP_TYPE_SINT16 && right.realtype == CUP_TYPE_SINT8) ||
+      (left.realtype == CUP_TYPE_SINT8 && right.realtype == CUP_TYPE_SINT16))
+    return CUP_TYPE_SINT16;
+  return CUP_TYPECOUNT;
 }
 
-const CUPType *defType(CUPState *state, const Node *nodes, size_t *pos, const CUPType *value) {
-  (void)value;
-  if (nodes == NULL)
-    return NULL;
+const CUPType *DTypes[UINT8_MAX];
+static size_t DRType = 0;
+
+size_t defTypeEx(CUPState *state, const Node *nodes, size_t *pos, const CUPType** value) {
+  printf("DRType = %ld\n", DRType);
+  if (DRType) {
+    DRType--;
+  }
+  if (!nodes || !state) {
+    cup_error("defType state or nodes are NULL");
+    return 0;
+  }
   assert(pos != NULL);
-  Node n = nodes[(*pos)++];
-  const CUPType *left, *right;
-  switch (n.type) {
-  default:
-    cup_errorf(state, "defType UNKNOWN node make for " "NODEFMT", NODEFMTV(n));
-    return NULL;
-  case N_ADD:
-  case N_SUB:
-  case N_MUL:
-  case N_DIV:
-  case N_MOD: {
-    left = defType(state, nodes, pos, NULL);
-    right = defType(state, nodes, pos, NULL);
 
-    if (left == right)
-      return left;
+  Node n = nodes[(*pos)++];
+  size_t nv = 0;
+  const CUPType *left = NULL, *right = NULL;
+
+  switch (n.type) {
+  case T_ADD: case T_SUB: case T_MUL: case T_DIV: case T_MOD:
+  {
+    nv = defTypeEx(state, nodes, pos, &left);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType left has multiple values");
+      return 0;
+    }
+    nv = defTypeEx(state, nodes, pos, &right);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType right has multiple values");
+      return 0;
+    }
+    //left = defTypeEx(state, nodes, pos, NULL);
+    //right = defTypeEx(state, nodes, pos, NULL);
+
+    if (left && right && left->realtype == right->realtype) {
+      *value = left;
+      return 1;
+    }
+    DRType++;
     cup_error("defType left and right are not compariable");
-    break;
+    return 0;
   }
-  case N_ASSIGN:
-  case N_ADDASSIGN:
-  case N_SUBASSIGN:
-  case N_MULASSIGN:
-  case N_DIVASSIGN: {
-    right = defType(state, nodes, pos, NULL);
-    return defType(state, nodes, pos, right);
-  }
-  case N_CALL: {
-    const CUPType *func_type = defType(state, nodes, pos, NULL);
-    const CUPType *args = defType(state, nodes, pos, NULL);
-    cup_errorf(state, "defType CALL %s %s", CType_name(func_type),
-               CType_name(args));
-    if (func_type && func_type->realtype == CUP_TYPE_FUNCTION) {
-      return func_type->types[0];
+  case T_EQ:
+  //case N_ADDASSIGN:
+  //case N_SUBASSIGN:
+  //case N_MULASSIGN:
+  //case N_DIVASSIGN:
+  {
+    //right = defTypeEx(state, nodes, pos, NULL);
+    nv = defTypeEx(state, nodes, pos, value);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType assign right has multiple values");
+      return 0;
     }
-    cup_error("getType call not Function");
-    return NULL;
+    char tname[256];
+    cup_type_snname(tname, sizeof(tname), *value);
+    printf("defType assign right type = %s\n", tname);
+    return defTypeEx(state, nodes, pos, value);
   }
-  case N_COMMA: {
-    size_t count = nodes[(*pos)++].value;
-    if (count >= UINT8_MAX)
-      break;
-    const CUPType **types;
-    calloc(types, sizeof(*types) * (count+1));
-    CUPType t = {0, 0, CUP_TYPE_STRUCT, types};
-    for (size_t i = 0; i < count; i++) {
-      types[i] = defType(state, nodes, pos, NULL);
-      if (t.alignment < types[i]->alignment)
-        t.alignment = types[i]->alignment;
-      t.size += types[i]->size;
+  case T_CALL: {
+    //left = defTypeEx(state, nodes, pos, NULL);
+    nv = defTypeEx(state, nodes, pos, &left);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType call left has multiple values");
+      return 0;
     }
-    char* name = cup_type_name(state, &t);
-    void* v = hashmap_get(state->types, name);
-    if (!v)
-      v = hashmap_put(&state->types, name, &t, sizeof(t));
-    free(name);
-    free(types);
-    return v;
+    if (left == NULL) {
+      cup_error("defType call NULL");
+      return 0;
+    }
+    if (left->realtype == CUP_TYPE_FUNCTION) {
+      //right = defTypeEx(state, nodes, pos, NULL);
+      nv = defTypeEx(state, nodes, pos, &right);
+      if (nv == 0) {
+        cup_error("defType call right has multiple values");
+        return 0;
+      }
+      if (right == NULL) {
+        cup_error("defType call args is NULL");
+        return 0;
+      }
+      if (nv >= 2) {
+        for (size_t i = 0; right->elements[i]; i++) {
+          const CUPType *arg_type = right->elements[i];
+          CUP_TYPE t = commonType(*arg_type, *left->elements[i + 1]);
+          if (t != CUP_TYPECOUNT) {
+            char tname[256];
+            cup_type_snname(tname, sizeof(tname), arg_type);
+            cup_errorf("defType call arg %ld type mismatch: expected %s", i, tname);
+            return 0;
+          }
+        }
+      }
+      *value = *left->elements;
+      return 1;
+    }
+    cup_error("defType call not Function");
+    return 0;
   }
-  case N_NUMBER: {
-    (*pos)++;
-    CUPType t = {sizeof(size_t), sizeof(size_t), CUP_TYPE_SINT64, NULL};
-    char* name = cup_type_name(state, &t);
-    void* v = hashmap_get(state->types, name);
-    if (!v)
-      v = hashmap_put(&state->types, name, &t, sizeof(t));
-    free(name);
-    return v;
+  case T_COMMA: {
+    nv = nodes[(*pos)++].value;
+    if (nv >= UINT8_MAX) {
+      cup_error("defType comma has strange count");
+      return 0;
+    }
+    memset(DTypes, 0, sizeof(DTypes));
+    CUPType t = {0, 0, CUP_TYPE_STRUCT, DTypes};
+    for (size_t i = 0; i < nv; i++) {
+      //DTypes[i] = defTypeEx(state, nodes, pos, NULL);
+      size_t nvi = defTypeEx(state, nodes, pos, &DTypes[i]);
+      if (nvi == 0 || nvi >= 2) {
+        cup_error("defType comma has multiple values for element");
+        return 0;
+      }
+      if (DTypes[i] == NULL) return 0; 
+      if (t.alignment < DTypes[i]->alignment)
+        t.alignment = DTypes[i]->alignment;
+      t.size += DTypes[i]->size;
+    }
+    *value = cup_type_put(state, &t);
+    return nv;
   }
-  case N_DOUBLE: {
-    (*pos)++;
-    CUPType t = {sizeof(double), sizeof(double), CUP_TYPE_DOUBLE, NULL};
-    char* name = cup_type_name(state, &t);
-    void* v = hashmap_get(state->types, name);
-    if (!v)
-      v = hashmap_put(&state->types, name, &t, sizeof(t));
-    free(name);
-    return v;
+  case T_NUMBER: {
+    nv = nodes[(*pos)++].value; //TODO: 
+    (void)nv;
+    *value = &cup_type_int;
+    return 1;
   }
-  case N_STRING:
-  case N_MSTRING: {
-    (*pos)++;
-    //TODO: array with size
-    return NULL;
+  case T_DOUBLE: {
+    nv = nodes[(*pos)++].value; //TODO: 
+    (void)nv;
+    *value = &cup_type_double;
+    return 1;
+  }
+  case T_STRING:
+  case T_MSTRING: {
+    assert(0 && "String literals not implemented");
+    nv = nodes[(*pos)++].value; //TODO: 
+    (void)nv; //TODO: array with size
+    *value = &cup_type_void;
+    return 1;
   }
   case N_VARIABLE: {
-    n = nodes[(*pos)++];
-    n.value = getScopeVar(state, n.value);
-    if (n.value == SIZE_MAX)
-      break;
-    CVariable *var = &(((CVariable *)state->vars.data)[n.value]);
-    if (value) {
-      if (var->type != value) {
-        if (var->type) {
-          cup_errorf(state, "defType value VAR %s = %s", CType_name(var->type),
-                     CType_name(value));
-          exit(1);
-        }
-        var->type = value;
-      }
-      return value;
+    size_t v = nodes[(*pos)++].value;
+    if (v == SIZE_MAX) {
+      cup_error("defType var not found");
+      return 0;
     }
-    return var->type;
+    CVariable* var = symmap_get(&state->symmap, v);
+    if (*value == NULL) {
+      *value = var->type;
+      return 1;
+    }
+    if (var->type != *value) {
+      if (var->type) {
+        cup_error("defType var type has value");
+      }
+      var->type = *value;
+    }
+    return 1;
+  }
+  case N_FUNCTION: {
+    nv = defTypeEx(state, nodes, pos, &left);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType function left has multiple values");
+      return 0;
+    }
+    *value = left;
+    return nv;
   }
   case N_UNARY:
-  case N_RETURN:
-  case N_FUNCTION: {
-    (*pos)++;
-    if (value)
-      goto err;
-    return defType(state, nodes, pos, nullptr);
+  case N_RETURN: {
+    nv = defTypeEx(state, nodes, pos, &left);
+    if (nv == 0 || nv >= 2) {
+      cup_error("defType function left has multiple values");
+      return 0;
+    }
+    *value = left;
+    return nv;
   }
   }
 
-err:
-  cup_errorf(state, "defType value " NODEFMT, NODEFMTV(n));
-  return nullptr;
+  cup_errorf("defType UNKNOWN node make for '%s'", token_names[n.type]);
+  return 0;
+}
+size_t defType(CUPState *state, const Node *nodes, const CUPType** value) {
+  size_t pos = 0;
+  size_t r = defTypeEx(state, nodes, &pos, value);
+  char tname[256];
+  cup_type_snname(tname, sizeof(tname), *value);
+  printf("defType result type = %s\n", tname);
+  return r;
 }
 
-//#define push_vector(a, b) push_vector(&a, b, sizeof(CVector))
-//#define fpush_vector(a, b) fpush_vector(&a, b, sizeof(Node))
+uint8_t getPower(CTType t) {
+  switch (t) {
+  default:
+    return UINT8_MAX;
 
-CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
-  CVector left = {};
+  case T_EOF:
+    return 0;
+  case T_IF:
+  case T_RETURN:
+  case T_NL:
+  case T_OCB:
+  case T_CRB:
+  case T_CCB:
+  case T_CSB:
+    return 1;
+
+  case T_COMMA:
+    return 2;
+
+  case T_EQ:
+  case T_ADDEQ:
+  case T_SUBEQ:
+  case T_MULEQ:
+  case T_DIVEQ:
+  case T_MODEQ:
+  case T_ANDEQ:
+  case T_OREQ:
+  case T_XOREQ:
+    return 3;
+
+  case T_OR:
+  case T_AND:
+  case T_XOR:
+    return 6;
+
+  case T_EQEQ:
+  case T_NOTEQ:
+    return 8;
+
+  case T_LESSEQ:
+  case T_GREATEQ:
+  case T_LESS:
+  case T_GREAT:
+    return 10;
+
+  case T_ADD:
+  case T_SUB:
+    return 12;
+
+  case T_MUL:
+  case T_DIV:
+  case T_MOD:
+    return 14;
+
+  case T_DOT:
+    return 16;
+  case T_CALL:
+    return 18;
+  case T_OSB:
+    return CUPDEFPOWER;
+  }
+}
+
+Nodes primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
+  Nodes left = {};
   switch (state->type) {
   case T_IMPORT: {
     getToken(state);
     if (state->type != T_STRING) {
-      cup_errorf(state, "Expected Module name after '%s'", node_name(state->nodes));
+      cup_errorf("Expected Module name[string] but got '%s'", token_names[state->type]);
       return left;
     }
     importModule(state);
@@ -249,7 +471,7 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
   case T_EXTERNAL: {
     getToken(state);
     if (state->type != T_STRING) {
-      cup_errorf(state, "Expected .DLL/.SO name after '%s'", node_name(state->nodes));
+      cup_errorf("Expected .DLL/.SO name[string] but got '%s'", token_names[state->type]);
       return left;
     }
     externalModule(state);
@@ -257,103 +479,94 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     return left;
   }
   case T_AT: { // function
-    vector_pushT(&left, state->node);
+    Node n = state->node;
     getToken(state);
 
     if (state->type == T_AT) {
       getToken(state);
-      cup_error(state, "function macro for 'T_AT' not implemented yet");
-      free(left.data);
-      return (CVector){};
+      cup_error("function macro for 'T_AT' not implemented yet");
+      return left;
     }
     if (state->type != T_IDENTIFIER) {
-      cup_errorf(state, "Expected T_IDENTIFIER, but got %s", "");
-      exit(1); 
+      cup_errorf("Expected T_IDENTIFIER, but got %s", "");
+      return left;
     }
-    vector_pushT(&left, state->node);
-    size_t v = getScopeVar(state, state->nodes.value);
-    if (v) {
-      cup_error(state, "redefined variable function");
+    vector_pushT(left.vec, n);           // T_AT
+    vector_pushT(left.vec, state->node); // T_IDENTIFIER
+    size_t name = state->nodes.value;
+    if (getScopeVar(state, name)) {
+      cup_error("redefined variable function");
       exit(1);
     }
-    v = addScopeVar(state, state->nodes.value, NULL, 0);
-    vector_pushT(&left, v);
+    symmap_put(&state->symmap, name, NULL, 0, state->scope);
+    vector_pushT(left.vec, name);
     getToken(state);
-    CVector vars = {state->vars.size, state->vars.size, NULL};
-    vars.data = malloc(state->vars.size);
-    state->vars.size = 0;
-    CVector args_nodes = primary(state, NULL, CUPDEFPOWER);
-    const CUPType *args_type;
-    {
-      size_t pos = 0;
-      args_type = defType(state, (Node *)args_nodes.data, &pos, NULL);
-    }
-    cup_error(state, "TODO: AT function");
-    exit(1);
-    if (state->type == T_NL)
-      skipSpaces(state);
 
-    {
-      CUPType type = cup_type_function(args_type);
-      void* r= hashmap_put(&state->types, NULL, &type, sizeof(type));
+    //CVector vars = {cup_malloc(state->vars_size), state->vars_size, state->vars_size};
+    //state->vars_size = 0;
 
-    }
-      ((CVariable *)vars.data)[v].type =
-    cup_type_get_function(state, state->target, args_type, NULL);
+    state->scope++;
+    Nodes args_nodes = statement(state, NULL);
+    const CUPType *type;
+    size_t nv = defType(state, args_nodes.data, &type);
+    char tname[256];
+    cup_type_snname(tname, sizeof(tname), type);
+    printf("defType(%ld) function args type = %s\n", nv, tname);
+    push_vector(&left.vec, args_nodes.vec);
 
-    //TODO: chgange  fpush_vector to add var
-    //fpush_vector(&state->vars, vars);
+    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, DTypes };
+    memmove(DTypes + 1, DTypes, sizeof(*DTypes) * nv);
+    DTypes[0]      = NULL;
+    DTypes[nv + 1] = NULL;
 
-    push_vector(left, args_nodes);
-    { // statement
-      const CUPType *fn_t = (const CUPType *)hashmap_getv(state->types, &state->vars.data[v].type, sizeof(state->vars.data[v].type));
-      push_vector(left, primary(state, (const CUPType **)&fn_t->types[1], CUPDEFPOWER));
-      if (state->node.type == T_NL)
-        skipSpaces(state);
-    }
+    //CUPType fn_t = cup_type_function(NULL, type);
+    type = cup_type_put(state, &fn_t);
+    //const CUPType *fn_t = cup_type_put(state, cup_type_function(NULL, args_type));
+    cup_type_snname(tname, sizeof(tname), type);
+    printf("defType function type = %s\n", tname);
+    getScopeVar(state, name)->type = type;
+    //((CVariable *)vars.data)[v].type = fn_t;
+
+    //TODO: change fpush_vector to add vars
+    //fpush_vector(&state->vars_vec, vars);
+
+    Nodes block = statement(state, type->elements);
+    push_vector(&left.vec, block.vec);
+    state->scope--;
     return left;
   }
   case T_BREAK:
   case T_CONTINUE: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     getToken(state);
     break;
   }
   case T_WHILE: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     skipSpaces(state);
-    push_vector(left, primary(state, return_type, CUPDEFPOWER));
-    if (state->type == T_NL)
-      skipSpaces(state);
-    { // statement
-      push_vector(left, primary(state, return_type, CUPDEFPOWER));
-      if (state->type == T_NL)
-        skipSpaces(state);
-      if (state->type == T_EOF)
-        cup_error(state, "Expected newline after while statement");
-    }
+    push_vector(&left.vec, statement(state, return_type).vec);
+    push_vector(&left.vec, statement(state, return_type).vec);
     return left;
   }
   case T_RETURN: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     skipSpaces(state);
-    CVector right = primary(state, NULL, CUPDEFPOWER);
+    Nodes right = primary(state, NULL, CUPDEFPOWER);
     if (return_type) {
-      size_t pos = 0;
-      *return_type = defType(state, (Node *)right.data, &pos, NULL);
+      defType(state, right.data, return_type);
       // cup_error(state, "Not valid return expression");
-      // cup_free(left.data);
+      // cup_cup_free(left.data);
       // left.data = nullptr;
       // left.capacity = 0;
       // left.size = 0;
       // return {};
     } else {
-      cup_error(state, "Return in not returnable expression");
+      cup_error("Return in not returnable expression");
       exit(1);
     }
-    push_vector(left, right);
+    push_vector(&left.vec, right.vec);
 
-    if (return_type) {
+    //if (return_type) {
       // const CType* type = defType(state, right);
       // if (*return_type && *return_type != type) {
       //   cup_error(state, "Return type mismatch");
@@ -361,44 +574,43 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
       // }
       // else
       //*return_type = type;
-    }
+    //}
     break;
   }
   case T_SUB: {
     state->type = N_UNARY;
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     getToken(state);
-    push_vector(left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(&left.vec, primary(state, return_type, CUPDEFPOWER).vec);
     break;
   }
   case T_NOT: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     getToken(state);
-    push_vector(left, primary(state, return_type, CUPDEFPOWER));
+    push_vector(&left.vec, primary(state, return_type, CUPDEFPOWER).vec);
     break;
   }
   case T_IDENTIFIER: {
-    vector_pushT(&left, state->node);
-
-    size_t v = getScopeVar(state, state->nodes.value);
-    if (v != SIZE_MAX) {
+    vector_pushT(left.vec, state->node);
+    size_t name = state->nodes.value;
+    CVariable* v = symmap_get(&state->symmap, name);
+    if (v) {
       // TODO: check is it conflict name and type
-      const char *s = CType_name(((CVariable *)state->vars.data)[v].type);
-      cup_errorf(state, "TODO: check is it conflict name and type %s", s);
+      //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";
+      //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
     } else {
-      v = addScopeVar(state, state->nodes.value, NULL, 0);
+      v = symmap_put(&state->symmap, name, NULL, 0, state->scope);
     }
-    state->nodes.value = v;
-    vector_pushT(&left, state->nodes);
+    vector_pushT(left.vec, name);
     getToken(state);
     if (state->type == T_OSB) {
-      cup_error(state, "Subscripts not implemented");
+      cup_error("Subscripts not implemented");
       exit(1);
     }
     break;
   }
   case T_STRING: {
-    vector_pushT(&left, state->nodes);
+    vector_pushT(left.vec, state->nodes);
     getToken(state);
     break;
   }
@@ -406,162 +618,160 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     Node2 n = state->nodes;
     getToken(state);
     if (state->type == T_DOT) {
-      n.node.type = N_DOUBLE;
-      n.node2.dvalue = (double)n.value;
+      n.node.type = T_DOUBLE;
+      n.dvalue = (double)n.value;
       getToken(state);
       if (state->type == T_NUMBER) {
         if (state->nodes.value != 0)
-          n.node2.dvalue += (state->nodes.value / pow(10, floor(log10(state->nodes.value) + 1)));
+          n.dvalue += (state->nodes.value / pow(10, floor(log10(state->nodes.value) + 1)));
       }
     }
-    vector_pushT(&left, n);
+    vector_pushT(left.vec, n);
     break;
   }
-  case T_ORB: { // '('
-    state->type = N_COMMA;
-    vector_pushT(&left, state->nodes);
+  case T_CALL: { // '('
+    Node2 tempn = state->nodes;
+    (void)tempn;
+    //state->type = T_COMMA;
+    //state->nodes.value = 1;
+    //vector_pushT(left.vec, state->nodes);
     skipSpaces(state);
     if (state->type != T_CRB) {
-      push_vector(left, primary(state, return_type, CUPDEFPOWER));
-      ((Node *)left.data)[1].value = 1;
+      Nodes block = statement(state, return_type);
+      if (block.data->type != T_COMMA) {
+        //tempn.node.loc.type = T_COMMA;
+        //tempn.value = 1;
+        //vector_pushT(left.vec, tempn);
+      }
+      push_vector(&left.vec, block.vec);
+      //push_vector(&left.vec, primary(state, return_type, CUPDEFPOWER).vec);
+      //(left.data)[1].value = 1;
     }
-    if (state->type == T_NL)
-      skipSpaces(state);
     expectAndNext(T_CRB);
     break;
   }
   case T_OCB: { // '{'
     state->type = N_BLOCK;
-    vector_pushT(&left, state->nodes);
+    vector_pushT(left.vec, state->nodes);
     skipSpaces(state); // skip T_OCB {
+    state->scope++;
     while (state->type != T_CCB) {
       { // statement
-        CVector block = primary(state, return_type, CUPDEFPOWER);
-        push_vector(left, block);
-        if (state->type == T_NL)
-          skipSpaces(state);
-        if (state->type == T_EOF)
-          cup_error(state, "Expected '}' but got EOF");
+        Nodes block = statement(state, return_type);
         if (block.data)
-          ((Node *)left.data)[1].value++;
+          (left.data)[1].value++;
+        push_vector(&left.vec, block.vec);
       }
     }
-    if (state->node.type == T_NL)
-      skipSpaces(state);
+    state->scope--;
+    //if (state->type == T_NL)
+    //  skipSpaces(state);
     expectAndNext(T_CCB);
     return left;
   }
   case T_OSB: { // '['
-    state->node.type = N_ARRAY;
-    vector_pushT(&left, state->nodes);
+    state->type = N_ARRAY;
+    vector_pushT(left.vec, state->nodes);
     skipSpaces(state);
     if (state->type != T_CSB) {
-      CVector body = primary(state, return_type, CUPDEFPOWER);
+      Nodes body = primary(state, return_type, CUPDEFPOWER);
       if (body.data)
-        ((Node *)left.data)[1].value++;
-      push_vector(left, body);
+        ((Node*)left.data)[1].value++;
+      push_vector(&left.vec, body.vec);
     }
-    if (state->node.type == T_NL)
+    if (state->type == T_NL)
       skipSpaces(state);
     expectAndNext(T_CSB);
     break;
   }
   case T_IF: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     skipSpaces(state);
-    push_vector(left, primary(state, return_type, CUPDEFPOWER));
-    if (state->node.type == T_NL)
+    push_vector(&left.vec, statement(state, return_type).vec);
+    push_vector(&left.vec, statement(state, return_type).vec);
+    if (state->type == T_ELSE) {
+      vector_fpushT(left.vec, state->node);
       skipSpaces(state);
-    { // statement
-      push_vector(left, primary(state, return_type, CUPDEFPOWER));
-      if (state->node.type == T_NL)
-        skipSpaces(state);
-      if (state->node.type == T_EOF)
-        cup_error(state, "Expected newline after while statement");
-    }
-    if (state->node.type == T_ELSE) {
-      vector_fpush_node(&left, &state->node);
-      skipSpaces(state);
-      { // statement
-        push_vector(left, primary(state, return_type, CUPDEFPOWER));
-        if (state->node.type == T_NL)
-          skipSpaces(state);
-        if (state->node.type == T_EOF)
-          cup_error(state, "Expected newline after while statement");
-      }
+      push_vector(&left.vec, statement(state, return_type).vec);
     }
     break;
   }
   case T_VARG: {
-    vector_pushT(&left, state->node);
+    vector_pushT(left.vec, state->node);
     getToken(state);
     break;
   }
   default: {
-    //cup_errorf(state, "primary: Unexpected token " NODEFMT,
-    //           NODEFMTV(state->nodes));
+    cup_errorf("primary: Unexpected token '%s'", token_names[state->type]);
     exit(1);
     break;
   }
   }
+  //if (state->type == T_EOF) {
+  //  exit(1);
+  //}
 
   while (1) {
-    Node2 t = state->nodes;
-    const uint8_t power = getPower(t.node.type);
-    printf("power: %d %s %d\n", mpower, CTType_name(t.node.type), power);
+    Node node = state->node;
+    const uint8_t power = getPower(node.type);
+#if DEBUG_LOG
+    printf("power: %d > %s %d\n", mpower, token_names[node.type], power);
+#endif
     if (power == UINT8_MAX) {
-      cup_errorf(state, "primary op1: Unexpected token %s",
-                 CTType_name(t.node.type));
+      cup_errorf("primary op1: Unexpected token %s", token_names[node.type]);
       exit(1);
     }
-    printf("%d < %d\n", power, mpower);
     if (power < mpower)
       return left;
     skipSpaces(state);
-    CVector right = {};
-    int norb = t.node.type != T_ORB;
+    Nodes right = {};
+    int norb = node.type != T_CALL;
     if (state->type != T_CRB || norb)
       right = primary(state, return_type, norb ? power : CUPDEFPOWER);
     else {
-      Node2 tempn = t;
-      tempn.node.type = N_COMMA;
+      printf("N_COMMA 0\n");
+      Node tempn = node;
+      tempn.type = T_COMMA;
+      vector_pushT(right.vec, tempn);
       tempn.value = 0;
-      vector_pushT(&right, tempn);
+      vector_pushT(right.vec, tempn);
     }
 
-    switch (t.node.type) {
-    case T_ORB: {
-      expectAndNext(T_CRB);
-      t.node.type = N_CALL;
-      vector_fpush_node(&left, &t);
-      Node *nptr = (Node *)right.data;
-      //cup_errorf(state, "CALL: " NODEFMT, NODEFMTV(*nptr));
-      if (nptr->type != N_COMMA) {
-        t.node.type = N_COMMA;
-        t.value = 1;
-        vector_pushT(&left, t);
+    switch (node.type) {
+    case T_CALL: {
+      if (state->type != T_CRB) {
+        cup_errorf("Expected T_CRB, but got %s", token_names[state->type]);
+        exit(1);
+      }
+      getToken(state);
+      //expectAndNext(T_CRB);
+      node.type = T_CALL;
+      vector_fpushT(left.vec, node);
+      Node *nptr = right.data;
+      //cup_errorf("CALL: %s", token_names[nptr->type]);
+      if (nptr->type != T_COMMA) {
+        node.type = T_COMMA;
+        vector_pushT(left.vec, node);
+        node.value = 1;
+        vector_pushT(left.vec, node);
       }
       break;
     }
     case T_EQ: {
-      assert(right.count >= 1 && "Right size is small");
-      {
-        size_t pos = 0;
-        const CUPType *rv = defType(state, (Node *)right.data, &pos, NULL);
-        pos = 0;
-        defType(state, (Node *)left.data, &pos, rv);
-      }
-      vector_fpush_node(&right, &t);
-      fpush_vector(left, right);
+      //defType(state, left.data,
+        //defType(state, right.data, (CUPType*)0)
+      //);
+      vector_fpushT(right.vec, node);
+      fpush_vector(&left.vec, right.vec);
       continue;
     }
     case T_COMMA: {
-      if (((Node *)left.data)->type == N_COMMA)
-        ((Node *)left.data)[1].value++;
+      if ((left.data)->type == T_COMMA)
+        (left.data)[1].value++;
       else {
         Node n = {.value = 2};
-        vector_fpush_node(&left, &n);
-        vector_fpush_node(&left, &t);
+        vector_fpushT(left.vec, n);
+        vector_fpushT(left.vec, node);
       }
       break;
     }
@@ -570,322 +780,253 @@ CVector primary(CUPState *state, const CUPType **return_type, uint8_t mpower) {
     case T_MUL:
     case T_LESSEQ:
     case T_SUB: {
-      vector_fpush_node(&left, &t);
+      vector_fpushT(left.vec, node);
       break;
     }
     default:
       //cup_errorf(state, "primary op2: Unexpected token " NODEFMT, NODEFMTV(t));
       exit(1);
     }
-    push_vector(left, right);
+    push_vector(&left.vec, right.vec);
   }
+}
+
+void printNodes(CUPModule* buf) {
+  for (Node* it = buf->it; it != buf->end; it++) {
+    if (it->type == N_BLOCK || it->type == T_NUMBER || it->type == T_COMMA) {
+      printf("%s - ", token_names[it->type]);
+      printf("%ld\n", (++it)->value);
+    } else if (it->type == T_IDENTIFIER) {
+      printf("%s - ", token_names[it->type]);
+      //printf("%p, %ld\n", buf->state, (++it)->value);
+      printf("%s\n", getString(buf->state, (++it)->value));
+    } else if (it->type == T_EQ || it->type == T_CALL) {
+      printf("%s\n", token_names[it->type]);
+    } else {
+      printf("%s (%ld)\n", token_names[it->type], it->value);
+    }
+  }
+}
+
+void printVar(void* ctx, const CVariable* v) {
+  CUPState* state = (CUPState*) ctx;
+  const char* str = getString(state, v->name);
+  char tname[256];
+  cup_type_snname(tname, sizeof(tname), v->type);
+  printf("Var: [%ld]%s type= %s, ptr= %ld, %p, scope= %ld\n",
+            v->name, str, tname, v->value, (void*)v->value, v->scope);
 }
 
 void parse(CUPState *state, const char* buf, const char* file) {
-  CUPModule* m = getModule(state, file);
-  if (m == NULL) {
-    calloc(m, sizeof(CUPModule));
-    m->path = file;
-    m->next = state->module;
-    state->module = m;
+  if (file) {
+    for (CUPModuleList* it = state->modules; it; it = it->next)
+      if (samefile(it->path, file))
+        return;
   }
+  CUPModule* m = (CUPModule*)cup_malloc(sizeof(CUPModuleList));
+  memset(m, 0, sizeof(CUPModuleList));
+  ((CUPModuleList*)m)->path = file;
+  ((CUPModuleList*)m)->next = state->modules;
+  state->modules = (CUPModuleList*)m;
+
+  const char* input_stream = state->input_stream;
+  const char* priv_stream = state->priv_stream;
+  Node2 ncopy = state->nodes;
+
+  state->priv_stream = NULL;
   state->input_stream = buf;
   state->loc.col = 1;
   state->loc.line = 1;
+  m->state = state;
 
-  CVector nodes = {};
-  state->nodes = (Node2){{N_BLOCK, 1, 1},{0}};
-  vector_pushT(&nodes, state->nodes);
+  Nodes nodes = {};
+  //Loc ttt = {N_BLOCK, 1, 1};
+  state->nodes = (Node2){};
+  state->loc = (Loc){N_BLOCK, 1, 1};
+  //state->nodes = (Node2){ {{N_BLOCK}, {}, 1}, 0 };
+  //state->nodes = (Node2){{N_BLOCK, 1, 1},{0}};
+  vector_pushT(nodes.vec, state->nodes);
 
   const CUPType *type = NULL;
+  char tname[256];
   skipSpaces(state);
   while (state->type != T_EOF) {
-    CVector n = primary(state, &type, CUPDEFPOWER);
-    size_t pos = 0;
-    defType(state, (Node *)n.data, &pos, NULL);
-    push_vector(nodes, n);
-
-    if (state->type == T_NL)
-      skipSpaces(state);
+    Nodes n = statement(state, &type);
     if (n.data)
-      ((Node *)nodes.data)[1].value++;
+      (nodes.data)[1].value++;
+    const CUPType *t = NULL;
+    defType(state, n.data, &t);
+    cup_type_snname(tname, sizeof(tname), t);
+    printf("type = %s\n", tname);
+    push_vector(&nodes.vec, n.vec);
   }
+  
   if (type) {
-    printf("type = %s\n", CType_name(type));
+    cup_type_snname(tname, sizeof(tname), type);
+    printf("type = %s\n", tname);
   }
+  m->it = nodes.data;
+  m->end = (Node*)((char*)m->it + nodes.size);
 
-  if (1) {
-    Node *ptr = (Node *)nodes.data;
-    size_t count = nodes.size / sizeof(Node);
-    printNodes(state, ptr, count);
-    count = state->vars.size / sizeof(CVariable);
-    printf("\nCVariable size = %ld\n", count);
-    while (count--) {
-      CVariable v = ((CVariable *)state->vars.data)[count];
-      size_t s = cup_type_size(v.type);
-      printf("Var: [%ld]%s type= %s, ptr= %ld, size = %ld\n", v.name,
-             getString(state, v.name), CType_name(v.type), (size_t)v.value, s);
-    }
-    printf("--\n");
-    // codegen
-    size_t init = 0;
-    CBuffer_ buf = {};
-    Nodes nnodes = {(Node *)nodes.data, nodes.size / sizeof(Node), 0};
-    codegen_func(&buf, &nnodes, &init, 0);
-    void *page = allocMemory(buf.size);
-    memcpy(page, buf.data, buf.size);
-    free(buf.data);
-    uint8_t *prr = (uint8_t *)page;
-    printf("prr = %p\n", prr);
-    CRealloc *rptr = buf.reallocs;
-    for (size_t i = 0; i < buf.r_count; i++) {
-      CRealloc rr = rptr[i];
-      if (prr[rr.ptr] == 0x55) {
-        printf("BR: %ld\n", *rr.var);
-        *rr.var = (size_t)(prr + rr.ptr);
-        printf("AR: %ld\n", *rr.var);
-      }
-      if (prr[rr.ptr] == 0) {
-        memcpy(prr + rr.ptr, rr.var, sizeof(size_t));
-      }
-      printf("[%ld] %ld %p (%02X) value = %ld\n", i, rr.ptr, rr.var,
-             prr[rr.ptr], *rr.var);
-    }
-    for (size_t i = 0; i < buf.size; i++) {
-      fprintf(stdout, "%02X", ((uint8_t *)page)[i]);
-    }
+  printNodes(m);
+  state->input_stream = input_stream;
+  state->nodes = ncopy;
+  //return;
 
-    printf("\n------\n");
-    typedef size_t (*JitFunc)();
-    JitFunc f = (JitFunc)(init);
-    f();
+  //symmap_iter(&state->symmap, state, printVar);
+  printf("--\n");
+  size_t init = 0;
+  codegen_func(m, &init, 0);
 
-    //   cup_error(state, "Failed to codegen");
-    // }
+  void *page = allocMemory(m->size);
+  memcpy(page, m->data, m->size);
+  cup_free(m->data);
+  
+  CRealloc *rptr = m->reallocs.data;
+  for (size_t i = m->reallocs.size / sizeof(CRealloc); i--;) {
+    CRealloc rr = rptr[i];
+    *rr.var = (size_t)(page + rr.ptr);
+    //if (m->data[rr.ptr] == 0x55) {
+      //printf("BR: %ld\n", *rr.var);
+      //*rr.var = (size_t)(m->data + rr.ptr);
+      //printf("AR: %ld\n", *rr.var);
+    //}
+    //if (m->data[rr.ptr] == 0) {
+      //memcpy(m->data + rr.ptr, rr.var, sizeof(size_t));
+    //}
+    printf("[%ld] %ld %p (%02X) value = %zx\n", i, rr.ptr, rr.var, m->data[rr.ptr], *rr.var);
+  }
+  printf("\n------\n");
+  for (size_t i = 0; i < m->size; i++) {
+    printf("%02X", m->data[i]);
+  }
+  printf("\n------\n");
+  //printf("init = %zx\n", init);
+
+  symmap_iter(&state->symmap, state, printVar);
+
+  printf("page = %p, init = %p\n", page, (void*)init);
+  typedef void (*JitFunc)();
+  ((JitFunc)init)();
+  
+  state->priv_stream = priv_stream;
+  state->input_stream = input_stream;
+  state->nodes = ncopy;
+}
+
+void emit_error(CUPModule *buf, size_t size) {
+  size_t capacity = PAGESIZE;
+  if (buf == NULL) {
+    cup_error("emit_error: buf is NULL");
+    exit(1);
+  }
+  if (buf->data == NULL)
+    buf->data = (uint8_t *)cup_malloc(capacity);
+  buf->size += size;
+  if (buf->size > capacity) {
+    do { capacity += PAGESIZE; } while (buf->size > capacity);
+    buf->data = (uint8_t *)cup_realloc(buf->data, capacity);
   }
 }
+void emit(CUPModule *buf, const void *value, size_t size) {
+  if (buf == NULL)
+    return;
+  size_t offset = buf->size;
+  emit_error(buf, size);
+  memcpy(buf->data + offset, value, size);
+}
+
 
 CUPState *cup_new(int target) {
   (void)target;
+  #define DCHART uint16_t
   CUPState* state;
-  calloc(state, sizeof(CUPState));
-  calloc(state->names, sizeof(uint8_t) * 2);
-  state->names += 2;
+  DCHART* names;
+  cup_alloc(state, CUPState);
+  cup_alloc(names, DCHART);
+  state->names = (uint8_t*)(names + 1);
+  //cup_calloc(state, sizeof(CUPState));
+  //cup_calloc(state->names, sizeof(uint8_t) * 2);
+  //state->names += 2;
+  symmap_init(&state->symmap);
   return state;
 }
 void cup_delete(CUPState *state) {
-  //TODO: chech free all
+  //TODO: chech cup_free all
   if (state == NULL)
     return;
-  for (CUPModule* m = state->module; m; m = m->next) {
-    freeMemory(m->code, m->capacity);
+  for (CUPModuleList* m = state->modules; m; m = m->next) {
+    //cup_freeMemory(m->code, m->capacity);
   }
-  free(state->vars.data);
-  free(state->data);
-  free(state);
+  symmap_free(&state->symmap);
+  //cup_free(state->vars);
+  cup_free(state->data);
+  cup_free(state);
 }
 int cup_compile_string(CUPState *state, const char *buf) {
-  if (state == NULL)
-    return CUP_ERR_STATE;
-  if (buf == NULL || *buf == '\0') {
-    cup_error(state, "Incorrect input stream");
-    return CUP_ERR_STATE;
-  }
-  parse(state, buf, NULL);
+  if (state == NULL || buf == NULL || *buf == '\0')
+    return CUP_ERR_ARGUMENTS;
+  parse(state, buf, "");
   return 0;
 }
 int cup_compile_file(CUPState *state, const char *filename) {
- if (state == NULL)
-    return CUP_ERR_STATE;
-  if (filename == NULL || *filename == '\0') {
-    cup_error(state, "Incorrect input file path");
-    return CUP_ERR_STATE;
-  }
+ if (state == NULL || filename == NULL || *filename == '\0')
+    return CUP_ERR_ARGUMENTS;
   FILE *f = fopen(filename, "rb");
-  if (f == NULL) {
-    cup_errorf(state, "File '%s' not found", filename);
+  if (f == NULL)
     return CUP_ERR_FILE_NOT_FOUND;
-  }
   fseek(f, 0, SEEK_END);
   long size = ftell(f);
   fseek(f, 0, SEEK_SET);
-  char *buf = (char*)malloc(size + 1);
+  char *buf = (char *)cup_malloc(size + 1);
   buf[size] = '\0';
   fread(buf, size, 1, f);
   fclose(f);
   parse(state, buf, filename);
-  free(buf);
+  cup_free(buf);
   return 0;
 }
-int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType *type) {
+int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType type) {
   // TODO: add check safe type
-  if (state == NULL)
-    return -1;
-  if (name == NULL || *name == '\0')
-    return -1;
-  size_t len = strlen(name);
-  idToken(state, name, len);
-
-  size_t v = getScopeVar(state, state->node.value);
-  if (v != SIZE_MAX) {
-    cup_errorf(state, "Cannot add symbol(%s) because it already exist", name);
+  if (state == NULL || name == NULL || *name == '\0') {
+    cup_error("Cannot add symbol(%s) because state == NULL || name == NULL");
     return -1;
   }
-  v = addScopeVar(state, state->node.value, type, (size_t)val);
+
+  size_t len = strlen(name);
+  if (!idToken(state, name, len)) {
+    cup_errorf("Cannot add symbol(%s) because it is a keyword", token_names[state->type]);
+    return -2;
+  }
+
+  CVariable* v = symmap_get(&state->symmap, state->nodes.value);
+  if (v) {
+    cup_errorf("Cannot add symbol(%s) because it already exist", name);
+    return -3;
+  }
+  const CUPType* t = cup_type_put(state, (CUPType*)&type);
+  symmap_put(&state->symmap, state->nodes.value, t, (size_t)val, 0);
   return 0;
 }
-void *cup_get_symbol(CUPState *state, const char *name) {
+CVariable *cup_get_symbol(CUPState *state, const char *name) {
   if (state == NULL)
     return NULL;
   if (name == NULL || *name == '\0')
     return NULL;
   size_t len = strlen(name);
   idToken(state, name, len);
-
-  size_t v = getScopeVar(state, state->node.value);
-  if (v == SIZE_MAX)
+  if (state->nodes.value == SIZE_MAX)
     return NULL;
-  return &(((CVariable *)state->vars.data)[v].value);
+  return symmap_get(&state->symmap, state->nodes.value);
 }
-
-const CUPType* cup_type_geti(CUPState *state, const size_t key) {
-  if (state == NULL) return CUP_ERR_CTYPE;
-  size_t index = hash(key) % state->types.maxlen;
-  if (index == SIZE_MAX) {
-    if (state->types.count == state->types.maxlen) {
-      size_t old_capacity = map->capacity;
-      Entry **old_buckets = map->buckets;
-  map->capacity *= 2;
-  map->buckets = cup_realloc(map->buckets, map->capacity * sizeof(Entry*));
-    }
-    index = state->types.count++;
-  }
-  size_t entry = state->types.indexs[index];
-  return &state->types.types[entry];
-}
-void cup_type_put(CUPState *state, const size_t key, CUPType value) {
-  if (state == NULL) return;
-  if (key >= CUPMAXTYPES) return;
-  if (key >= state->types.maxlen) {
-    state->types.maxlen *= 2;
-    state->types.types = cup_realloc(state->types.types,
-      state->types.maxlen * sizeof(*state->types.types));
-
-     size_t old_capacity = map->capacity;
-  Entry **old_buckets = map->buckets;
-  map->capacity *= 2;
-  map->buckets = cup_realloc(map->buckets, map->capacity * sizeof(Entry*));
-  memset(&map->buckets[old_capacity], 0, old_capacity);  
-  // Rehash all entries
-  Entry *entries_to_rehash[map->size];
-  size_t entry_count = 0;
-    
-  // Collect all entries
-  for (size_t i = 0; i < old_capacity; i++) {
-    Entry *entry = map->buckets[i];
-    map->buckets[i] = NULL;  // Clear old bucket
-    while (entry) {
-      Entry *next = entry->next;
-      entries_to_rehash[entry_count++] = entry;
-      entry = next;
+void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {
+  if (state == NULL)
+    return;
+  if (!state->symmap.slots) return;
+  for (size_t i = 0; i < state->symmap.capacity; i++) {
+    SymEntry se = state->symmap.slots[i];
+    if (!slot_empty(&se) && se.vars[0].scope == 0) {
+      cb(ctx, getString(state, se.vars[0].name), se.vars[0].value, se.vars[0].type);
     }
   }
-    
-  // Reinsert all entries
-  for (size_t i = 0; i < entry_count; i++) {
-    Entry *entry = entries_to_rehash[i];
-    size_t index = hash(entry->key) % map->capacity;
-    entry->next = map->buckets[index];
-    map->buckets[index] = entry;
-  }
-
-  }
-  state->types.types[key];
-  const CUPType* t = cup_type_get(state, key);
-
-  hashmap_put(state->types, key, value);
-}
-static size_t type_name(HashMapType* map, CUPType* t, char* buf) {
-#define setb(x) {if(buf) memcpy(buf, x, sizeof(x)-1); return (sizeof(x)-1);}
-  if (!t) goto end;
-  switch (t->realtype) {
-  case CUP_TYPE_VOID: setb("void")
-  case CUP_TYPE_INT: setb("int")
-	case CUP_TYPE_FLOAT: setb("float")
-	case CUP_TYPE_DOUBLE: setb("double")
-	case CUP_TYPE_UINT8: setb("uint8");
-	case CUP_TYPE_SINT8: setb("int8");
-	case CUP_TYPE_UINT16: setb("uint16");
-	case CUP_TYPE_SINT16: setb("int16");
-	case CUP_TYPE_UINT32: setb("uint32");
-	case CUP_TYPE_SINT32: setb("int32");
-	case CUP_TYPE_UINT64: setb("uint64");
-	case CUP_TYPE_SINT64: setb("int64");
-	case CUP_TYPE_STRUCT: {
-    char* name = "name";
-    size_t len = strlen(name);
-    memcpy(buf, name, len);
-    buf += len;
-    memchr(buf, "{", 1);
-    for (CUPType** i = t->types, ) {
-
-    }
-    if(buf) {
-      memcpy(buf+r, "[XXX]", 2+3);
-    }
-    return r + 2 + 3;
-  }
-	case CUP_TYPE_POINTER: {
-    size_t r = type_name(map, t->type, buf); // internal
-    if(buf) memcpy(buf+r, "*", 1);
-    return r + 1;
-  }
-  case CUP_TYPE_ARRAY: {
-    size_t r = type_name(map, t->type, buf); // internal
-    if(buf) {
-      memcpy(buf+r, "[XXX]", 2+3);
-    }
-    return r + 2 + 3;
-  }
-  case CUP_TYPE_FUNCTION: return NULL;
-  }
-end:
-  setb("NULL")
-}
-size_t cup_type_put_pointer(CUPState *state, CUPType value) {
-  assert(state != NULL);
-  assert(value.realtype == CUP_TYPE_POINTER);
-  char* key = NULL;
-  size_t size = 1 + 1;
-  for (CUPType* t = value.type; ;) {
-    char* n = type_name(t);
-    if (n)
-      size += strlen(n);
-    else {
-      if (t->realtype == CUP_TYPE_POINTER) {
-        cup_type_put_pointer(state, *t);
-      }
-	case CUP_TYPE_STRUCT: return NULL;
-	case CUP_TYPE_POINTER: return NULL;
-  case CUP_TYPE_ARRAY: return NULL;
-  case CUP_TYPE_FUNCTION: return NULL;
-
-    }
-  }
-  
-  hashmap_put(state->types, key, value);
-}
-void cup_type_put_array(CUPState *state, CUPType value) {
-  if (state == NULL) return;
-  assert(value.realtype == CUP_TYPE_ARRAY);
-  char* key = NULL;
-  size_t size = 1 + 1;
-  hashmap_put(state->types, key, value);
-}
-void cup_type_put_function(CUPState *state, CUPType value) {
-  if (state == NULL) return;
-  assert(value.realtype == CUP_TYPE_FUNCTION);
-  char* key = NULL;
-  size_t size = 1 + 1;
-  hashmap_put(state->types, key, value);
 }

@@ -1,354 +1,320 @@
+/**
+ * @file cup.h
+ * @brief Internal header for the CUP compiler (not part of the public API).
+ */
+
 #ifndef CUP_H
 #define CUP_H
 
 #include "libcup.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
-#define free(x) cup_realloc((x), 0)
-#define malloc(x) cup_realloc(NULL, (x))
-#define calloc(v, size) do {v = malloc((size)); memset(v, 0, (size));} while (0)
+/* ========================================================================== */
+/*                           MEMORY HELPERS                                   */
+/* ========================================================================== */
 
-const char *cup_vsprintf(const char *format, va_list args);
-const char *cup_sprintf(const char *format, ...);
-const char *cup_strdup(const char *str);
-extern const char* CFE;
+/*
+ * Do NOT redefine malloc/free/calloc as macros — it breaks system headers
+ * included after this file and makes calloc unusable as an expression.
+ * Use the cup_* prefixed wrappers everywhere inside the compiler.
+ */
+#define cup_free(x)          cup_realloc((x), 0)
+#define cup_malloc(x)        cup_realloc(NULL, (x))
+#define cup_alloc(name, T) \
+    do { name = (T*)cup_malloc(sizeof(T)); memset(name, 0, sizeof(T)); } while (0)
 
-#if 1
-#define cup_warnf(state, f, ...)                                               \
-  do {                                                                         \
-    char *_ = cup_sprintf((f), __VA_ARGS__);           \
-    cup_log(CUP_Level_WARN, _);                                               \
-    free(_);                                              \
-  } while (0)
-#define cup_warn(msg) cup_log(CUP_Level_WARN, (msg));
+/* cup_calloc(ptr, size): allocate `size` bytes and zero them.
+ * Usage:  MyType *p; cup_calloc(p, sizeof(MyType)); */
+#define cup_calloc(v, size) \
+    do { (v) = cup_malloc(size); memset((v), 0, (size)); } while (0)
 
-#define cup_errorf(state, f, ...)                                              \
-  do {                                                                         \
-    char *_ = cup_sprintf((f), __VA_ARGS__);           \
-    cup_log(CUP_Level_ERRO, _);                                               \
-    free(_);                                              \
-  } while (0)
-#define cup_error(msg) cup_log(CUP_Level_ERRO, (msg));
+char *cup_vsprintf(const char *format, va_list args);
+char *cup_sprintf(const char *format, ...);
+char *cup_strdup(const char *str);
+
+/* ========================================================================== */
+/*                           LOGGING HELPERS                                  */
+/* ========================================================================== */
+
+#define cup_warnf(f, ...) \
+    do { \
+        char *_msg = cup_sprintf((f), __VA_ARGS__); \
+        cup_log(CUP_Level_WARN, _msg); \
+        cup_free(_msg); \
+    } while (0)
+
+#define cup_warn(msg)  cup_log(CUP_Level_WARN, (msg))
+
+#define cup_errorf(f, ...) \
+    do { \
+        char *_msg = cup_sprintf((f), __VA_ARGS__); \
+        cup_log(CUP_Level_ERRO, _msg); \
+        cup_free(_msg); \
+    } while (0)
+
+#define cup_error(msg) cup_log(CUP_Level_ERRO, (msg))
+
+/* ========================================================================== */
+/*                           DEBUG LOGGING                                    */
+/* ========================================================================== */
+
+#ifdef CUP_DEBUG
+#  define cup_dbgf(f, ...) \
+    do { \
+        const char *_msg = cup_sprintf((f), __VA_ARGS__); \
+        cup_log(CUP_Level_INFO, _msg); \
+        cup_free(_msg); \
+    } while (0)
+#  define cup_dbg(msg) cup_log(CUP_Level_INFO, (msg))
 #else
-#endif // CUP_ERROR_H
+#  define cup_dbgf(f, ...) ((void)0)
+#  define cup_dbg(msg)     ((void)0)
+#endif
 
 /* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
 /* ========================================================================== */
 
-/** Dynamic array container */
+/** Generic dynamic array. */
 typedef struct CVector {
-  void *data;      /**< Pointer to data */
-  size_t size;
-  size_t capacity; /**< Allocated capacity in bytes */
+    void  *data;
+    size_t size;
+    size_t capacity;
 } CVector;
 
-void vector_push(CVector *vec, const void *data, size_t sizeT);
-void push_vector(CVector *dest, CVector src, size_t sizeT);
-void vector_fpush(CVector *vec, const void *data, size_t sizeT);
-void fpush_vector(CVector *dest, CVector src, size_t sizeT);
+void vector_push (CVector *vec, const void *data, size_t elem_size);
+void vector_fpush(CVector *vec, const void *data, size_t elem_size);
+void push_vector (CVector *dest, CVector src);   /* consumes src */
+void fpush_vector(CVector *dest, CVector src);   /* consumes src */
 
-#define vector_pushT(left, data)  vector_push( (left),&(data),sizeof(data))
-#define vector_fpushT(left, data) vector_fpush((left),&(data),sizeof(data))
-
-/* ========================================================================== */
-/*                           HASH TABLE                                       */
-/* ========================================================================== */
-
-typedef struct VectorMapKey {
-  const char* key;
-  size_t offset;
-} VectorMapKey;
-
-typedef struct VectorMap {
-  void *data;
-  size_t count;
-  size_t capacity;
-  VectorMapKey *keys;
-} VectorMap;
-
-typedef unsigned long hash_t;
-
-static hash_t hash(const char *str) {
-    hash_t hash = 5381;
-    int c;
-    while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c; // hash * 33 + c
-    }
-    return hash;
-}
-
-void hashmap_resize(VectorMap *map, size_t sizeT);
-VectorMapKey* hashmap_get_keyslot(VectorMap map, const char *key, size_t sizeT);
-void* hashmap_get(VectorMap map, const char *key);
-void* hashmap_put(VectorMap *map, const char *key, const void* value, size_t sizeT);
-void hashmap_free(VectorMap *map);
+#define vector_pushT(vec, val)  vector_push (&(vec), &(val), sizeof(val))
+#define vector_fpushT(vec, val) vector_fpush(&(vec), &(val), sizeof(val))
 
 /* ========================================================================== */
-/*                           VARIABLES & SCOPE                                */
+/*                           SYMBOL HASH MAP                                  */
 /* ========================================================================== */
+/*
+ * Open-addressing Robin Hood hash map.
+ * Key:   size_t name_idx  (interned name offset; SIZE_MAX = empty sentinel)
+ * Value: CVariable        (type, name, value) stored inline — no separate array
+ *
+ * CVariable.name == SYMMAP_EMPTY marks a free slot.
+ * Robin Hood invariant keeps probe distances short.
+ */
 
-/** Variable definition */
+#define SYMMAP_EMPTY    SIZE_MAX
+#define SYMMAP_LOAD_NUM 3   /* grow when count*4 > capacity*3  (75 %) */
+#define SYMMAP_LOAD_DEN 4
+#define SYMMAP_VAR_DEPTH 16
+
 typedef struct CVariable {
-  size_t type;       /**< Variable type */
-  size_t name;       /**< Offset into name table */
-  size_t value;      /**< Variable value/address */
+    const CUPType *type; /**< Variable type */
+    size_t name;         /**< Offset into string-intern table */
+    size_t value;         /**< Variable value / symbol address */
+    size_t scope;
 } CVariable;
 
+
+typedef struct SymEntry {
+  size_t    dist; /* Robin Hood probe distance; 0 on empty slot */
+  CVariable vars[SYMMAP_VAR_DEPTH];  /* var.name == SYMMAP_EMPTY means the slot is free */
+} SymEntry;
+
+typedef struct SymbolMap {
+  SymEntry *slots;
+  size_t    count;    /* live entries */
+  size_t    capacity; /* slot count, always a power of two */
+} SymbolMap;
+
+static inline int slot_empty(const SymEntry *s) {
+  return s->vars[0].name == SYMMAP_EMPTY;
+}
+
+void       symmap_init(SymbolMap *m);
+void       symmap_free(SymbolMap *m);
+/* Insert or update; returns pointer to the stored CVariable (stable until next grow). */
+CVariable *symmap_put(SymbolMap *m, size_t name_idx, const CUPType *type, size_t value, size_t depth);
+/* Returns pointer to the stored CVariable, or NULL if not found. */
+CVariable *symmap_get(const SymbolMap *m, size_t name_idx);
+/* Remove an entry (used when popping scopes). */
+void       symmap_del(SymbolMap *m, size_t name_idx);
+/* Iterate every live entry; cb receives each CVariable* in insertion order. */
+void       symmap_iter(const SymbolMap *m, void *ctx,
+                       void (*cb)(void *ctx, const CVariable *var));
+
 /* ========================================================================== */
-/*                           AST NODES                                        */
+/*                           TOKEN / NODE TYPES                               */
 /* ========================================================================== */
 
-enum {
-  T_EOF = '\0',
-  N_END = T_EOF,
-
-  T_NL = '\n',
-  N_NEWLINE = T_NL,
-  T_CATNL = '\\',
-
-  T_RETURN = 'r',
-  N_RETURN = T_RETURN,
-  T_CONTINUE = 'n',
-  N_CONTINUE = T_CONTINUE,
-  T_BREAK = 'b',
-  N_BREAK = T_BREAK,
-  T_IF = 'i',
-  N_IF = T_IF,
-  T_ELSE = 'e',
-  N_IFELSE = T_ELSE,
-  T_FOR = 'f',
-  N_FOR = T_FOR,
-  T_WHILE = 'w',
-  N_WHILE = T_WHILE,
-
-  T_IDENTIFIER = '0',
-  N_VARIABLE = T_IDENTIFIER,
-  T_NUMBER = '1',
-  N_NUMBER = T_NUMBER,
-  T_DOUBLE = '2',
-  N_DOUBLE = T_DOUBLE,
-  T_STRING = '3',
-  N_STRING = T_STRING,
-  T_MSTRING = '4',
-  N_MSTRING = T_MSTRING,
-  T_RANGE = '5',
-  N_RANGE = T_RANGE,
-
-  T_ADD = '+',
-  N_ADD = T_ADD,
-  T_SUB = '-',
-  N_SUB = T_SUB,
-  T_MUL = '*',
-  N_MUL = T_MUL,
-  T_DIV = '/',
-  N_DIV = T_DIV,
-  T_MOD = '%',
-  N_MOD = T_MOD,
-  T_AND = '&',
-  N_AND = T_AND,
-  T_OR = '|',
-  N_OR = T_OR,
-  T_XOR = '^',
-  N_XOR = T_XOR,
-  T_LESS = '<',
-  N_LESS = T_LESS,
-  T_GREAT = '>',
-  N_GREAT = T_GREAT,
-  T_NOT = '!',
-  N_NOT = T_NOT,
-  T_EQ = '=',
-  N_ASSIGN = T_EQ,
-
-  T_ORB = '(',
-  T_CRB = ')',
-  T_OCB = '{',
-  T_CCB = '}',
-  T_OSB = '[',
-  T_CSB = ']',
-
-  N_CALL = 'c',
-  N_UNARY = 'u',
-  N_BLOCK = 'l',
-  N_OBJECT = 'o',
-  N_SUBSCRIPT = 's',
-  N_ARRAY = 'a',
-  T_DOT = '.',
-  N_MEMBER = T_DOT,
-  T_COMMA = ',',
-  N_COMMA = T_COMMA,
-  T_COLON = ':',
-  T_SCOLON = ';',
-
-  T_IMPORT = '#',
-  T_EXTERNAL = '~',
-
-  T_ASK = '?',
-  T_AT = '@',
-  N_FUNCTION = T_AT,
-  T_THIS = '$',
-  T_VARG = 'V',
-  N_VARG = T_VARG,
-
-  T_ADDEQ = 'A',
-  N_ADDASSIGN = T_ADDEQ,
-  T_SUBEQ = 'S',
-  N_SUBASSIGN = T_SUBEQ,
-  T_MULEQ = 'M',
-  N_MULASSIGN = T_MULEQ,
-  T_DIVEQ = 'D',
-  N_DIVASSIGN = T_DIVEQ,
-  T_MODEQ = 'O',
-  N_MODASSIGN = T_MODEQ,
-  T_ANDEQ = 'N',
-  N_ANDASSIGN = T_ANDEQ,
-  T_OREQ = 'R',
-  N_ORASSIGN = T_OREQ,
-  T_XOREQ = 'X',
-  N_XORASSIGN = T_XOREQ,
-  T_LESSEQ = 'L',
-  N_LESSEQ = T_LESSEQ,
-  T_GREATEQ = 'G',
-  N_GREATEQ = T_GREATEQ,
-  T_NOTEQ = 'T',
-  N_NOTEQ = T_NOTEQ,
-  T_EQEQ = 'E',
-  N_EQEQ = T_EQEQ,
+#define DEF(name) name,
+enum CTType_ {
+#include "token.h"
+    COUNT
 };
+#undef DEF
 typedef uint16_t CTType;
 
-/** Source code location for error reporting */
+#define N_VARIABLE T_IDENTIFIER
+
+extern const char *token_names[];
+
+/** Source location for error reporting. */
 typedef struct {
-  CTType type;   /**< Token type at this location */
-  uint16_t col;  /**< Column number (1-indexed) */
-  uint32_t line; /**< Line number (1-indexed) */
+    CTType   type;
+    uint16_t col;
+    uint32_t line;
 } Loc;
 
-/** Token with location information */
 typedef union {
-  CTType type;
-  Loc loc;
+    CTType type;
+    Loc    loc;
 } Token;
 
-const uint8_t* getdata(CUPState* state, const char* str, size_t len);
-const char *getString(CUPState *state, size_t index);
-uint8_t *idToken(CUPState *state, const char *str, size_t len);
-
-void getToken(CUPState *state);
-void skipSpaces(CUPState *state);
-
-/** AST node union */
+/** Single AST node. */
 typedef union {
-  Token token;
-  CTType type;
-  Loc loc;
-  size_t value;
-  double dvalue;
+    Token  token;
+    CTType type;
+    Loc    loc;
+    size_t value;
+    double dvalue;
 } Node;
 
-typedef struct {
-  Node node;
-  union {
-    Node node2;
-    size_t value;
-  };
+/** Node + optional payload (number value / string index). */
+typedef struct Node2 {
+    Node   node;
+    union {
+        size_t value;
+        double dvalue;
+    };
 } Node2;
 
-typedef struct {
-  Node *nodes;
-  size_t count;  
-  size_t pos;
+typedef union Nodes {
+    struct {
+        Node  *data;
+        size_t size;
+        size_t capacity;
+    };
+    CVector vec;
 } Nodes;
 
-typedef struct {
-  size_t *var;
-  size_t ptr;
+const char       *node_name(Node n);
+size_t defTypeEx(CUPState *state, const Node *nodes,
+                             size_t *pos, const CUPType **value);
+size_t defType(CUPState *state, const Node *nodes,
+                          const CUPType **value);
+const CUPType    *cup_type_get(CUPState *state, const CUPType* type);
+const CUPType    *cup_type_put(CUPState *state, const CUPType* type);
+void codegen_func(CUPModule* buf, size_t *value, size_t i);
+
+typedef union CTypes {
+    struct {
+        CUPType **data;
+        size_t    size;
+        size_t    capacity;
+    };
+    CVector vec;
+} CTypes;
+
+/* ========================================================================== */
+/*                           STRING INTERNING                                 */
+/* ========================================================================== */
+
+uint8_t       *idToken(CUPState *state, const char *str, size_t len);
+
+void getToken  (CUPState *state);
+void skipSpaces(CUPState *state);
+
+/* ========================================================================== */
+/*                           CODE EMISSION                                    */
+/* ========================================================================== */
+
+typedef struct CRealloc {
+    size_t         *var;
+    size_t          ptr;
 } CRealloc;
 
-typedef struct {
-  CRealloc* reallocs;
-  size_t count;
-  size_t capacity;
+typedef union CReallocs {
+    struct {
+        CRealloc *data;
+        size_t    size;
+        size_t    capacity;
+    };
+    CVector vec;
 } CReallocs;
 
-typedef struct {
-  uint8_t *data;
-  size_t size;
-  size_t capacity;
-  CRealloc *reallocs;
-  size_t r_count;
-} CBuffer_;
+struct CUPModule {
+    CUPState *state;
+    uint8_t  *data;
+    size_t    size;
+    struct {
+        Node *it;
+        Node *end;
+    };
+    CReallocs reallocs;
+};
+
+static_assert(sizeof(CUPModule) == (8 * sizeof(size_t)),
+              "CUPModule size must be 8 bytes");
+
+typedef struct _CUPModuleList {
+    CUPModule             module;
+    const char           *path;
+    struct _CUPModuleList *next;
+} CUPModuleList;
+
+void emit_error(CUPModule *buf, size_t nbytes);
+void emit      (CUPModule *buf, const void *value, size_t size);
+
+#define emit8(buf, v)  do { uint8_t  _v = (v); emit((buf), &_v, 1); } while (0)
+#define emit16(buf, v) do { uint16_t _v = (v); emit((buf), &_v, 2); } while (0)
+#define emit32(buf, v) do { uint32_t _v = (v); emit((buf), &_v, 4); } while (0)
+#define emit64(buf, v) do { uint64_t _v = (v); emit((buf), &_v, 8); } while (0)
 
 /* ========================================================================== */
 /*                           COMPILER STATE                                   */
 /* ========================================================================== */
 
-typedef struct _CUPCompiledModule {
-  const char* path;
-  uint8_t* code;
-  size_t size;
-  size_t capacity;
-  CReallocs reallocs;
-  struct _CUPCompiledModule* next;
-} CUPCompiledModule;
-
-struct CUPModule {
-  const char* path;
-  uint8_t* code;
-  size_t size;
-  size_t capacity;
-  Nodes nodes;
-  CUPModule* next;
-};
-
-static_assert(sizeof(CUPModule) == (8 * sizeof(size_t)), "CUPModule size must be 8 bytes");
-
-typedef struct CUPVars {
-  CVariable *data;      /**< Pointer to data */
-  size_t size;     /**< Current size in bytes */
-  size_t capacity; /**< Allocated capacity in bytes */
-} CUPVars;
-
-typedef struct CUPTypes {
-  size_t* indexs;
-  CUPType* types;
-  size_t count;
-  size_t maxlen;
-} CUPTypes;
-
-
 struct CUPState {
-  /* Source input */
-  const char *input_stream;
-  const char *priv_stream;
+    /* Source input */
+    const char *input_stream;
+    const char *priv_stream;
 
-  /* Parser state - uses union for efficient storage */
-  union {
-    CVariable *variable;
-    Token token;
-    CTType type;
-    Loc loc;
-    Node node;
-    Node2 nodes;
-  };
+    /* Current parser token / node */
+    union {
+        CVariable *variable;
+        Token      token;
+        CTType     type;
+        Loc        loc;
+        Node       node;
+        Node2      nodes;
+    };
 
-  /* Symbol table */
-  uint8_t *names;   /**< String interning table */
-  uint8_t *data;    /**< Additional data storage */
-  size_t data_size; /**< Size of data storage */
-  CUPModule* module;
+    /* String intern table.
+     * names_base: original allocation pointer (needed for safe getString walk
+     *             and for cup_delete to free exactly what was allocated).
+     * names:      pointer to one past the last interned byte (grows upward). */
+    uint8_t *names;
 
-  /* Variable and memory management */
-  CUPVars vars;  /**< Variable definitions */
+    /* General data (string literal storage) */
+    uint8_t *data;
+    size_t   data_size;
 
-  VectorMap types;
+    CUPModuleList *modules;
 
-  CUPTarget* target;
+    /* Variable table */
+    SymbolMap symmap;
+
+    CTypes     types;
+    CUPTarget *target;
+    size_t scope;
+    //CUPCodeGen generator;
 };
 
-/* Ensure consistent memory layout */
-static_assert(sizeof(CUPState) == 128, "CUPState size must be 128 bytes");
+static_assert(sizeof(CUPState) == 128,
+              "CUPState size must be 128 bytes");
 
 #endif /* CUP_H */

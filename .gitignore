@@ -2,9 +2,8 @@ tests/
 test/
 cup
 cup.elf
-a.out
-libcup.a
-libcup.o
-libcup.so
+*.a
+*.o
+*.so
 test.txt
 fib.c

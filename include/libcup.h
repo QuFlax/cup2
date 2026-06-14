@@ -1,10 +1,10 @@
 /**
  * @file libcup.h
  * @brief Main API for the CUP compiler library
- * @version 1.0
+ * @version 1.1
  *
- * This header provides the public interface for CUP - a JIT compiler
- * that compiles custom scripts to native x64 machine code.
+ * Public interface for CUP - a JIT compiler that compiles custom scripts
+ * to native x64 machine code.
  */
 
 #ifndef LIBCUP_H
@@ -22,107 +22,84 @@ extern "C" {
 #define PAGESIZE 4096
 #endif
 
-#define CUP_ERR_CTYPE NULL
-#define CUP_ERR_MOMORY -1
-#define CUP_ERR_STATE -2
-#define CUP_ERR_FILE_NOT_FOUND -3
+/* Error codes */
+#define CUP_ERR_CTYPE               NULL
+#define CUP_ERR_MEMORY              -1
+#define CUP_ERR_ARGUMENTS           -2
+#define CUP_ERR_FILE_NOT_FOUND      -3
 #define CUP_ERR_FILE_NOT_RECOGNIZED -4
 
-//TODO: CROSSCOMPILE STATIC/DLL(import)/SO
+/* Backwards-compat alias for the old typo */
+#define CUP_ERR_MOMORY CUP_ERR_MEMORY
+
 #define CUP_API
-# define CUP_EXTERN extern CUP_API
+#define CUP_EXTERN extern CUP_API
 
-typedef enum {
-  CUP_TYPE_VOID,
-  CUP_TYPE_INT,
-	CUP_TYPE_FLOAT,
-	CUP_TYPE_DOUBLE,
-	CUP_TYPE_UINT8,
-	CUP_TYPE_SINT8,
-	CUP_TYPE_UINT16,
-	CUP_TYPE_SINT16,
-	CUP_TYPE_UINT32,
-	CUP_TYPE_SINT32,
-	CUP_TYPE_UINT64,
-	CUP_TYPE_SINT64,
-	CUP_TYPE_STRUCT,
-	CUP_TYPE_POINTER,
-  CUP_TYPE_ARRAY,
-  CUP_TYPE_FUNCTION,
-};
-typedef uint16_t CUP_TYPE;
+typedef struct CUPState  CUPState;
+typedef struct CUPModule CUPModule;
 
-typedef enum {
-  CUP_Level_INFO = 0, /**< Info messages (can be ignored)*/
-  CUP_Level_WARN = 1, /**< Warning message */
-  CUP_Level_ERRO = 2  /**< Error message */
-} CUP_LogLevel;
+/* ========================================================================== */
+/*                              ALLOCATOR / LOGGER                            */
+/* ========================================================================== */
 
+//typedef void *(*CUP_Realloc_Fn)(const void *ptr, size_t size);
 typedef void *(*CUP_Realloc_Fn)(void *ptr, size_t size);
 
-CUP_Realloc_Fn* _cup_realloc(void);
+CUP_Realloc_Fn *_cup_realloc(void);
 #define cup_realloc (*_cup_realloc())
 
-/**
- * @brief Set custom memory allocator
- * @param realloc_func Allocator function
- */
+/** @brief Set a custom memory allocator (per-thread). */
 void cup_set_realloc(CUP_Realloc_Fn realloc_func);
+
+typedef enum {
+    CUP_Level_INFO = 0, /**< Informational — may be ignored */
+    CUP_Level_WARN = 1, /**< Warning */
+    CUP_Level_ERRO = 2  /**< Error */
+} CUP_LogLevel;
 
 typedef void (*CUP_Log_Fn)(CUP_LogLevel level, const char *msg);
 
-CUP_Log_Fn* _cup_log(void);
+CUP_Log_Fn *_cup_log(void);
 #define cup_log (*_cup_log())
 
-/**
- * @brief Set custom error handler
- * @param error_func Error handler function
- */
+/** @brief Set a custom log/error handler (per-thread). */
 void cup_set_error_func(CUP_Log_Fn error_func);
-
-typedef struct CUPState CUPState;
-
-/**
- * @brief Create a new compiler state
- * @param target Custom target generator (-1 for default)
- * @return New compiler state or NULL on failure
- */
-CUPState *cup_new(int target);
-
-/**
- * @brief Destroy compiler state and free resources
- * @param state Compiler state to destroy
- */
-void cup_delete(CUPState *state);
-
-typedef struct CUPModule CUPModule;
-
-typedef void *(*CUPCodeGen)(CUPState *state, CUPModule* buf);
-
-typedef struct CUPTarget {
-  char arch[8];
-  char os[8];
-  CUPCodeGen generator;
-} CUPTarget;
-
-CUPTarget* cup_get_target(size_t i);
-size_t cup_get_target_count();
 
 /* ========================================================================== */
 /*                              TYPE SYSTEM                                   */
 /* ========================================================================== */
 
-typedef struct _CUPType {
-  size_t size;
-  uint16_t alignment;
-  CUP_TYPE realtype;
-  union {
-    struct _CUPType** types;
-    struct _CUPType* type;
-  };
+typedef enum CUP_TYPE {
+    CUP_TYPE_VOID,
+    CUP_TYPE_INT,
+    CUP_TYPE_FLOAT,
+    CUP_TYPE_DOUBLE,
+    CUP_TYPE_UINT8,
+    CUP_TYPE_SINT8,
+    CUP_TYPE_UINT16,
+    CUP_TYPE_SINT16,
+    CUP_TYPE_UINT32,
+    CUP_TYPE_SINT32,
+    CUP_TYPE_UINT64,
+    CUP_TYPE_SINT64,
+    CUP_TYPE_STRUCT,
+    CUP_TYPE_POINTER,
+    CUP_TYPE_ARRAY,
+    CUP_TYPE_FUNCTION,
+    CUP_TYPECOUNT
+} CUP_TYPE;
+
+typedef struct CUPType {
+    size_t size;
+    uint16_t alignment;
+    uint16_t realtype;
+    const struct CUPType **elements;
 } CUPType;
 
 CUP_EXTERN CUPType cup_type_void;
+CUP_EXTERN CUPType cup_type_int;
+CUP_EXTERN CUPType cup_type_float;
+CUP_EXTERN CUPType cup_type_double;
 CUP_EXTERN CUPType cup_type_uint8;
 CUP_EXTERN CUPType cup_type_sint8;
 CUP_EXTERN CUPType cup_type_uint16;
@@ -131,80 +108,106 @@ CUP_EXTERN CUPType cup_type_uint32;
 CUP_EXTERN CUPType cup_type_sint32;
 CUP_EXTERN CUPType cup_type_uint64;
 CUP_EXTERN CUPType cup_type_sint64;
-CUP_EXTERN CUPType cup_type_float;
-CUP_EXTERN CUPType cup_type_double;
 
 #define cup_type_struct(...) \
     (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
-        (CUPType*[]){ __VA_ARGS__, NULL } \
-    }
+        (const CUPType *[]){ __VA_ARGS__, NULL } }
+
 #define cup_type_pointer(type) \
     (CUPType){ 0, 0, CUP_TYPE_POINTER, \
-        (CUPType*[]){ type, NULL } \
-    }
+        (const CUPType *[]){ (type), NULL } }
+
 #define cup_type_array(type) \
     (CUPType){ 0, 0, CUP_TYPE_ARRAY, \
-        (CUPType*[]){ type, NULL } \
+        (const CUPType *[]){ (type), NULL } }
+
+#define cup_type_function(rtype, ...) \
+    (CUPType){ \
+        sizeof(void *), \
+        (uint16_t)sizeof(void *), \
+        CUP_TYPE_FUNCTION, \
+        (const CUPType *[]){ \
+            (rtype), \
+            __VA_ARGS__, \
+            NULL \
+        } \
     }
-#define cup_type_function(args) \
-    (CUPType){ sizeof(void*), sizeof(void*), CUP_TYPE_FUNCTION, \
-        (CUPType*[]){ args, NULL } \
-    }
-//const CUPType* cup_type_geti(CUPState *state, const size_t i);
-//void cup_type_put(CUPState *state, const char *key, CUPType value);
-//const CUPType *cup_type_get_pointer(CUPState *state, const CUPType *ptrtype);
-//const CUPType *cup_type_get_array(CUPState *state, size_t count, const CUPType *ptrtype);
-//const CUPType *cup_type_get_function(CUPState *state, CUPTarget* target, const CUPType *args, const CUPType *return_type);
+
+typedef struct CVariable CVariable;
+
+/** @brief Return a human-readable name for a type (freshly allocated). */
+size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
+//char *cup_type_name(const CUPType *type);
+
+const uint8_t *getdata(CUPState *state, const char *str, size_t len);
+const char    *getString(CUPState *state, size_t index);
 
 /* ========================================================================== */
-/*                           SYMBOL MANAGEMENT                                */
+/*                              TARGETS                                       */
+/* ========================================================================== */
+
+typedef void *(*CUPCodeGen)(CUPState *state, CUPModule *buf);
+
+typedef struct CUPTarget {
+    char arch[8];
+    char os[8];
+    CUPCodeGen generator;
+} CUPTarget;
+
+CUPTarget *cup_get_target(size_t i);
+size_t     cup_get_target_count(void);
+
+/* ========================================================================== */
+/*                              STATE LIFECYCLE                               */
 /* ========================================================================== */
 
 /**
- * @brief Register external symbol
- * @param state Compiler state
- * @param name Symbol name
- * @param val Symbol address
- * @param type Symbol type
- * @return 0 on success, -1 on error
+ * @brief Create a new compiler state.
+ * @param target Target index, or -1 for the default (host) target.
+ * @return New state, or NULL on failure.
+ */
+CUPState *cup_new(int target);
+
+/** @brief Destroy a compiler state and free all associated resources. */
+void cup_delete(CUPState *state);
+
+/* ========================================================================== */
+/*                              SYMBOL MANAGEMENT                             */
+/* ========================================================================== */
+
+/**
+ * @brief Register an external symbol.
+ * @return 0 on success, negative error code otherwise.
  */
 int cup_add_symbol(CUPState *state, const char *name, void *val,
-                   const CUPType *type);
+                   CUPType type);
 
 /**
- * @brief Look up symbol by name
- * @param state Compiler state
- * @param name Symbol name
- * @return Symbol address or NULL if not found
+ * @brief Look up a symbol by name.
+ * @return Pointer to the CVariable entry, or NULL if not found.
  */
-void *cup_get_symbol(CUPState *state, const char *name);
+CVariable *cup_get_symbol(CUPState *state, const char *name);
+
+void* cup_var_value(CVariable* var);
+const char* cup_var_name(CUPState* state, CVariable* var);
+const CUPType* cup_var_type(CUPState* state, const CVariable* var);
+
+typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const size_t val, const CUPType *type);
+
+/** @brief Iterate over all registered symbols. */
+void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);
 
 /* ========================================================================== */
 /*                              COMPILATION                                   */
 /* ========================================================================== */
 
-/**
- * @brief Compile source code from string
- * @param state Compiler state
- * @param source Source code string
- * @return 0 on success, error code otherwise
- */
+/** @brief Compile source from a NUL-terminated string. */
 int cup_compile_string(CUPState *state, const char *source);
 
-/**
- * @brief Compile source code from file
- * @param state Compiler state
- * @param filename Path to source file
- * @return 0 on success, error code otherwise
- */
+/** @brief Compile source from a file. */
 int cup_compile_file(CUPState *state, const char *filename);
 
-/**
- * @brief Output object code from context
- * @param state Compiler state
- * @param filename Path to object file
- * @return 0 on success, error code otherwise
- */
+/** @brief Write an ELF64 relocatable object file. */
 int cup_output_object(CUPState *state, const char *filename);
 
 #ifdef __cplusplus

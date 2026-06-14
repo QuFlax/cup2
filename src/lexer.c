@@ -5,7 +5,6 @@
 
 #include "../include/cup.h"
 #include <assert.h>
-#include <string.h>
 
 /* ========================================================================== */
 /*                         CHARACTER CLASSIFICATION                           */
@@ -28,12 +27,9 @@ static inline int isID(const unsigned char c) {
  * @return Index of character or -1 on end
  */
 static int strindex(const char *str, const char c) {
-  const char *ptr = str;
-  while (*ptr != c) {
-    if (*ptr == '\0') return -1;
-    ptr++;
-  }
-  return ptr - str;
+  for (const char *ptr = str; *ptr; ptr++)
+    if (*ptr == c) return ptr - str;
+  return -1;
 }
 
 /* ========================================================================== */
@@ -56,7 +52,7 @@ const uint8_t* getdata(CUPState* state, const char* str, size_t len) {
  * @return Pointer to string or empty string if not found
  */
 const char *getString(CUPState *state, size_t index) {
-  if (state->names == NULL || index == SIZE_MAX)
+  if (state == NULL || state->names == NULL || index == SIZE_MAX)
     return NULL;
 
   /* Find the start sentinel [0, 0] */
@@ -143,15 +139,16 @@ uint8_t *idToken(CUPState *state, const char *str, size_t len) {
         state->names[len] = '\0';
         state->names += len + 1;
       }
+      state->type = T_IDENTIFIER;
       return keyword;
     }
-    state->node.value++;
+    state->nodes.value++;
     if (keyword == NULL) {
       /* Found [0, non-0] strings_start */
       if (l == len && memcmp(str, current, l) == 0) {
         /* Match found and we need go to start */
         keyword = current;
-        state->node.value = 0;
+        state->nodes.value = 0;
       } else {
         /* No match, continue to next keyword in backward order */
         l = 0;
@@ -177,19 +174,19 @@ static void nextChar(const char **stream, Loc *next) {
   int i = newlineChar(*stream);
   if (i == 0) {
     next->col++;
-    *stream++;
+    i = 1;
   } else {
-    *stream += i;
     next->line++;
     next->col = 1;
   }
+  *stream += i;
 }
 
 /* ========================================================================== */
 /*                         NUMBER PARSING                                     */
 /* ========================================================================== */
 
-static const char *binaryChar(CUPState *state, const char *p) {
+const char *binaryChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (; (*p == '0' || *p == '1') || *p == '_'; ++p)
     if (*p != '_')
@@ -198,7 +195,7 @@ static const char *binaryChar(CUPState *state, const char *p) {
   return p;
 }
 
-static const char *octalChar(CUPState *state, const char *p) {
+const char *octalChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (; (*p >= '0' && *p <= '7') || *p == '_'; ++p)
     if (*p != '_')
@@ -207,7 +204,7 @@ static const char *octalChar(CUPState *state, const char *p) {
   return p;
 }
 
-static const char *hexChar(CUPState *state, const char *p) {
+const char *hexChar(CUPState *state, const char *p) {
   size_t value = 0;
   for (;; ++p) {
     if (*p == '_')
@@ -230,7 +227,7 @@ static const char *hexChar(CUPState *state, const char *p) {
  * @param state Compiler state
  * @return true if prefix number parsed successfully
  */
-inline int zeroChar(CUPState *state, const char *p) {
+int zeroChar(CUPState *state, const char *p) {
   const char f = *p | 32;
 
   if (f == 'b') { /* Binary: 0b... */
@@ -249,8 +246,7 @@ inline int zeroChar(CUPState *state, const char *p) {
   return 0;
 }
 
-const size_t numberChar(CUPState* state) {
-  const char* ptr = state->input_stream;
+size_t numberChar(CUPState* state) {
   size_t value = 0;
   for (;(*state->input_stream >= '0' && *state->input_stream <= '9') ||
            *state->input_stream == '_';state->input_stream++) {
@@ -264,20 +260,22 @@ const size_t numberChar(CUPState* state) {
 /*                         TOKEN EXTRACTION                                   */
 /* ========================================================================== */
 
-/**
- * @brief Get next token from input stream
- * @param state Compiler state
- */
-void getToken(CUPState *state) {
-  /* Operator tables for quick lookup */
+
   static const CTType types1[] = {T_ADD, T_SUB,  T_MUL,   T_DIV, T_MOD, T_AND,
                                   T_OR,  T_LESS, T_GREAT, T_XOR, T_NOT, T_EQ};
   static const CTType doubles[] = {T_ADDEQ,   T_SUBEQ, T_MULEQ, T_DIVEQ,
                                    T_MODEQ,   T_ANDEQ, T_OREQ,  T_LESSEQ,
                                    T_GREATEQ, T_XOREQ, T_NOTEQ, T_EQEQ};
   static const CTType types2[] = {
-      T_ORB,   T_CRB,    T_OCB,    T_CCB, T_OSB, T_CSB,  T_DOT,   T_COMMA,
+      T_CALL,   T_CRB,    T_OCB,    T_CCB, T_OSB, T_CSB,  T_DOT,   T_COMMA,
       T_COLON, T_SCOLON, T_IMPORT, T_ASK, T_AT,  T_THIS, T_CATNL, T_EXTERNAL};
+
+/**
+ * @brief Get next token from input stream
+ * @param state Compiler state
+ */
+void getToken(CUPState *state) {
+  /* Operator tables for quick lookup */
 
   state->nodes.value = 0;
 
@@ -360,17 +358,17 @@ void getToken(CUPState *state) {
   u.i = strindex("+-*/%&|<>^!=", input_char);
   if (u.i != -1) {
     if (*(++state->input_stream) != '=') {
-      state->type = types1[(uint8_t)input_char];
+      state->type = types1[u.i];
       return;
     }
-    state->type = doubles[(uint8_t)input_char];
+    state->type = doubles[u.i];
     return;
   }
   /* Single-character delimiters */
   u.i = strindex("(){}[].,:;#?@$\\~", input_char);
   if (u.i != -1) {
     state->input_stream++;
-    state->type = types2[(uint8_t)input_char];
+    state->type = types2[u.i];
     return;
   }
   /* Keywords and identifiers */
@@ -379,8 +377,7 @@ void getToken(CUPState *state) {
   size_t len = state->input_stream - u.temp;
 
   /* It's an identifier - intern it */
-  if (idToken(state, u.temp, len))
-    state->type = T_IDENTIFIER;
+  idToken(state, u.temp, len);
 }
 
 /**
