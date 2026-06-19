@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
-  //printf("LIST:\n");
+  printf("LIST:\n");
   cup_list_symbols(state, state, symbol_cb);
   printf("OK\n");
 #if 0

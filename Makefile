@@ -1,63 +1,67 @@
-CC = clang
-CFLAGS = -ggdb -Wall -Wextra -fsanitize=memory -O0 -I./ -I./include
-LDFLAGS = -lm
-LIB_NAME = libcup
-CUP_NAME = cup
-# -fsanitize=address 
+CC := clang
 
-# Source files
-SRC_DIR   = src
-SRC_FILES = $(SRC_DIR)/lexer.c \
-            $(SRC_DIR)/parser.c \
-            $(SRC_DIR)/utils.c \
-            $(SRC_DIR)/types.c \
-            $(SRC_DIR)/codegen/x64codegen.c
+BUILD_DIR := build
+SRC_DIR := src
 
-OBJ_FILES = $(SRC_FILES:.c=.o)
+LIB_NAME := libcup
+CUP_NAME := cup
 
-all: $(LIB_NAME).so $(LIB_NAME).a $(CUP_NAME).elf $(CUP_NAME)
+CFLAGS := -ggdb -Wall -Wextra -fsanitize=memory -O0 -I. -I./include
+LDFLAGS := -lm
 
-%.o: %.c
+SRC_FILES := \
+	$(SRC_DIR)/lexer.c \
+	$(SRC_DIR)/parser.c \
+	$(SRC_DIR)/utils.c \
+	$(SRC_DIR)/types.c \
+	$(SRC_DIR)/moduler.c \
+	$(SRC_DIR)/codegen/x64codegen.c
+
+OBJ_FILES := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRC_FILES))
+
+STATIC_LIB := $(BUILD_DIR)/$(LIB_NAME).a
+SHARED_LIB := $(BUILD_DIR)/$(LIB_NAME).so
+STATIC_EXE := $(BUILD_DIR)/$(CUP_NAME)
+SHARED_EXE := $(BUILD_DIR)/$(CUP_NAME).elf
+
+all: $(STATIC_LIB) $(SHARED_LIB) $(STATIC_EXE) $(SHARED_EXE)
+
+# Create build directories automatically
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
-$(LIB_NAME).a: $(OBJ_FILES)
+$(STATIC_LIB): $(OBJ_FILES)
+	@mkdir -p $(dir $@)
 	ar rcs $@ $^
 
-$(LIB_NAME).so: $(OBJ_FILES)
+$(SHARED_LIB): $(OBJ_FILES)
 	$(CC) -shared -o $@ $^ $(LDFLAGS)
 
-$(CUP_NAME).elf: ./main.c $(LIB_NAME).so $(LIB_NAME).a
-	$(CC) $(CFLAGS) $< -L. -lcup $(LDFLAGS) -Wl,-rpath,'$$ORIGIN' -o $@
+$(STATIC_EXE): main.c $(STATIC_LIB)
+	$(CC) $(CFLAGS) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
-$(CUP_NAME): ./main.c $(LIB_NAME).so $(LIB_NAME).a
-	$(CC) $(CFLAGS) $< $(LIB_NAME).a $(LDFLAGS) -o $@
+$(SHARED_EXE): main.c $(SHARED_LIB)
+	$(CC) $(CFLAGS) $< -L$(BUILD_DIR) -lcup \
+		-Wl,-rpath,'$$ORIGIN' \
+		$(LDFLAGS) -o $@
 
-# $(LIB_NAME).a: $(LIB_NAME).o
-#		ar rcs $@ $^
-#
-# $(LIB_NAME).so: $(LIB_NAME).o
-#		$(CXX) -shared -o $@ $^ $(LDFLAGS)
-#
-# $(LIB_NAME).o: ./libcup.c
-#		$(CXX) $(CFLAGS) -fPIC -c $< -o $@
-#
-# $(CUP_NAME).elf: ./main.cpp $(LIB_NAME).so $(LIB_NAME).a
-#		$(CXX) $(CFLAGS) ./main.cpp -L. -lcup $(LDFLAGS) -Wl,-rpath,'$$ORIGIN' -o $@
-#
-# $(CUP_NAME): ./main.cpp $(LIB_NAME).so $(LIB_NAME).a
-#		$(CXX) $(CFLAGS) ./main.cpp $(LIB_NAME).a $(LDFLAGS) -o $@
-#
-# Run test (now works without LD_LIBRARY_PATH)
-run: $(CUP_NAME)
-		./$(CUP_NAME)
+run: $(STATIC_EXE)
+	./$(STATIC_EXE)
 
-debug: $(CUP_NAME)
-		lldb ./$(CUP_NAME)
+run-shared: $(SHARED_EXE)
+	./$(SHARED_EXE)
 
-ldd: $(CUP_NAME)
-		ldd ./$(CUP_NAME)
+debug: $(STATIC_EXE)
+	lldb ./$(STATIC_EXE)
+
+ldd: $(SHARED_EXE)
+	ldd ./$(SHARED_EXE)
 
 clean:
-	rm -f $(OBJ_FILES) $(LIB_NAME).so $(LIB_NAME).a $(CUP_NAME) $(CUP_NAME).elf
+	rm -rf $(BUILD_DIR)
 
-.PHONY: all run debug ldd clean
+.PHONY: all run run-shared debug ldd clean

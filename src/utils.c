@@ -128,7 +128,8 @@ void fpush_vector(CVector *dest, CVector src) {
 /* ========================================================================== */
 /*                         SYMBOL HASH MAP                                    */
 /* ========================================================================== */
-/*
+
+/* TODO: change to true
  * Open-addressing Robin Hood hash map.
  * Key:   var.name  (interned name offset; SYMMAP_EMPTY == free slot)
  * Value: CVariable stored inline inside SymEntry — no external array needed.
@@ -136,112 +137,134 @@ void fpush_vector(CVector *dest, CVector src) {
  * Robin Hood: on collision we steal the slot from whichever entry has the
  * smaller probe distance ("richer" entry), keeping max probe length short.
  */
- 
-#define SYMMAP_INIT_CAPACITY 16   /* must be a power of two */
- 
-static size_t sym_hash(size_t key) {
+
+#define CMAP_INIT_CAPACITY 16   /* must be a power of two */
+
+size_t map_hash(size_t key) {
   /* Fibonacci / multiplicative hashing for size_t keys */
   return key * (size_t)11400714819323198485ULL;
 }
- 
-void symmap_init(SymbolMap *m) {
-  m->count    = 0;
-  m->capacity = SYMMAP_INIT_CAPACITY;
-  cup_calloc(m->slots, sizeof(SymEntry) * m->capacity);
-  for (size_t i = 0; i < m->capacity; i++)
-    for (size_t j = 0; j < SYMMAP_VAR_DEPTH; j++)
-      m->slots[i].vars[j].name = SYMMAP_EMPTY;
-}
- 
-void symmap_free(SymbolMap *m) {
-  cup_free(m->slots);
-  m->slots    = NULL;
-  m->count    = 0;
-  m->capacity = 0;
+
+static inline void map_set(size_t *slot, size_t key, size_t dist, const void *value, size_t v_size) {
+  slot[1] = dist;
+  *slot = key;
+  memcpy((void*)(slot + 2), value, v_size);
 }
 
-static void symmap_insert_raw(SymEntry *slots, size_t cap, SymEntry entry, size_t depth) {
-  size_t idx = sym_hash(entry.vars[depth].name) & (cap - 1);
-  entry.dist = 0;
-  for (;;) {
-    SymEntry *slot = &slots[idx];
-    if (slot_empty(slot)) {
-      *slot = entry;
-      return;
-    }
-    if (slot->dist < entry.dist) {
-      SymEntry tmp = *slot;
-      *slot  = entry;
-      entry  = tmp;
-    }
-    entry.dist++;
-    idx = (idx + 1) & (cap - 1);
-  }
-}
- 
-static void symmap_grow(SymbolMap *m) {
-  size_t    new_cap   = m->capacity * 2;
-  SymEntry *new_slots = (SymEntry *)cup_malloc(sizeof(SymEntry) * new_cap);
-  for (size_t i = 0; i < new_cap; i++)
-    for (size_t j = 0; j < SYMMAP_VAR_DEPTH; j++)
-      new_slots[i].vars[j].name = SYMMAP_EMPTY;
+void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default) {
+  m->count    = 0;
+  m->capacity = CMAP_INIT_CAPACITY;
+  //m->v_size   = v_size;
+  //m->k_null   = k_null;
+  //m->hash     = hash_fn;
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+  assert(sizeof(size_t) * 32 >= kdv_size);
+  assert(sizeof(size_t) <= v_size);
+  m->slots = cup_malloc(kdv_size * m->capacity);
   for (size_t i = 0; i < m->capacity; i++)
-    if (!slot_empty(&m->slots[i]))
-      symmap_insert_raw(new_slots, new_cap, m->slots[i], 0);
-  cup_free(m->slots);
+    map_set(m->slots + i * kdv_size, k_null, SIZE_MAX, v_default, v_size);
+/*
+  if (v_default)
+    for (size_t i = 0; i < m->capacity; i++) {
+      size_t *slot = m->slots + i * kdv_size;
+      map_set(slot, k_null, 0, v_default, v_size);
+    }
+  else
+    memset(m->slots, 0, kdv_size * m->capacity);
+*/
+}
+void map_free(CMap *m) {
+  (void)m;
+}
+static void cmap_grow(CMap *m, size_t v_size, size_t k_null) {
+  size_t    new_cap   = m->capacity * 2;
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+  void *new_slots = cup_malloc(kdv_size * new_cap);
+#if 1
+  size_t* kdv_default = NULL;
+  for (size_t i = 0; !kdv_default && i < m->capacity; i++) {
+    size_t *slot = m->slots + i * kdv_size;
+    if (*slot == k_null) kdv_default = slot;
+  }
+  for (size_t i = 0; i < new_cap; i++)
+    memcpy(new_slots + i * kdv_size, kdv_default, kdv_size);
+#else
+
+    for (size_t i = 0; i < new_cap; i++) {
+    memcpy(new_slots + i * (sizeof(int32_t) + m->kv_size), kv_null, m->kv_size);
+  }
+#endif
+  void* old_slots = m->slots;
+  size_t old_cap = m->capacity;
   m->slots    = new_slots;
   m->capacity = new_cap;
-}
- 
-CVariable *symmap_put(SymbolMap *m, size_t name_idx,
-                      const CUPType *type, size_t value, size_t depth) {
-  /* Grow at 75 % load */
-  if (m->count * SYMMAP_LOAD_DEN >= m->capacity * SYMMAP_LOAD_NUM)
-    symmap_grow(m);
-  size_t idx = sym_hash(name_idx) & (m->capacity - 1);
- 
-  SymEntry entry = { .dist = 0,
-                     .vars  = { { .type = type, .name = name_idx, .value = value, .scope = depth } } };
- 
-  for (;;) {
-    SymEntry *slot = &m->slots[idx];
- 
-    if (slot_empty(slot)) {
-      *slot = entry;
-      m->count++;
-      return &slot->vars[0];
-    }
-    if (slot->vars[0].name == name_idx) {
-      /* Update in place */
-      slot->vars[0].type  = type;
-      slot->vars[0].value = value;
-      return &slot->vars[0];
-    }
-    if (slot->dist < entry.dist) {
-      /* Robin Hood swap */
-      SymEntry tmp = *slot;
-      *slot  = entry;
-      entry  = tmp;
-    }
-    entry.dist++;
-    idx = (idx + 1) & (m->capacity - 1);
+
+  for (size_t i = 0; i < old_cap; i++) {
+    size_t *slot = old_slots + i * kdv_size;
+    if (*slot == k_null) continue;
+    map_put(m, *slot, (void*)(slot + 2), v_size, k_null);
   }
+  cup_free(old_slots);
 }
- 
-CVariable *symmap_get(const SymbolMap *m, size_t name_idx) {
+void *map_get(const CMap *m, size_t key, size_t v_size, size_t k_null) {
   if (!m->slots || m->capacity == 0) return NULL;
-  size_t idx  = sym_hash(name_idx) & (m->capacity - 1);
+  size_t i  = map_hash(key) & (m->capacity - 1);
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
   size_t dist = 0;
   for (;;) {
-    SymEntry *slot = &m->slots[idx];
-    /* Empty slot or entry closer than expected — key absent */
-    if (slot_empty(slot) || slot->dist < dist) return NULL;
-    if (slot->vars[0].name == name_idx)             return &slot->vars[0];
+    size_t *slot = m->slots + i * kdv_size;
+    if (*slot == k_null || slot[1] < dist) return NULL;
+    if (*slot == key) return (void*)(slot + 2);
     dist++;
-    idx = (idx + 1) & (m->capacity - 1);
+    i = (i + 1) & (m->capacity - 1);
   }
 }
- 
+void *map_put(CMap *m, size_t key, void *value, size_t v_size, size_t k_null) {
+  if (m->count * CMAP_LOAD_DEN >= m->capacity * CMAP_LOAD_NUM)
+    cmap_grow(m, v_size, k_null);
+  size_t i = map_hash(key) & (m->capacity - 1);
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+  size_t dist = 0;
+  for (;;) {
+    size_t *slot = m->slots + i * kdv_size;
+    if (*slot == k_null) {
+      map_set(slot, key, dist, value, v_size);
+      m->count++;
+      return (void*)(slot + 2);
+    }
+    if (*slot == key) {
+      memcpy((void*)(slot + 2),
+             value, v_size);
+      return (void*)(slot + 2);
+    }
+    if (slot[1] < dist) {
+      /* Robin Hood swap */
+      uint8_t tmp[sizeof(size_t) * 32];
+      memcpy(tmp, slot, kdv_size); //SymEntry tmp = *slot;
+      map_set(slot, key, dist, value, v_size);
+      //*slot  = entry;
+      dist = ((size_t*)tmp)[1];
+      key = *((size_t*)tmp);
+      memcpy(value, (void*)tmp + sizeof(size_t) + sizeof(size_t), v_size);
+      //entry  = tmp;
+    }
+    dist++;
+    i = (i + 1) & (m->capacity - 1);
+  }
+}
+
+
+void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, size_t k_null) {
+  if (!m || !m->slots) return;
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+  for (size_t i = 0; i < m->capacity; i++) {
+    size_t *slot = m->slots + i * kdv_size;
+    if (*slot != k_null)
+      cb(ctx, *slot, slot[1], (void*)(slot + 2));
+  }
+}
+
+/*
 void symmap_del(SymbolMap *m, size_t name_idx) {
   if (!m->slots || m->capacity == 0) return;
   size_t idx  = sym_hash(name_idx) & (m->capacity - 1);
@@ -250,7 +273,7 @@ void symmap_del(SymbolMap *m, size_t name_idx) {
     SymEntry *slot = &m->slots[idx];
     if (slot_empty(slot) || slot->dist < dist) return;
     if (slot->vars[0].name == name_idx) {
-      /* Backward-shift deletion preserves Robin Hood invariant */
+       Backward-shift deletion preserves Robin Hood invariant
       slot->vars[0].name = SYMMAP_EMPTY;
       m->count--;
       for (;;) {
@@ -276,3 +299,4 @@ void symmap_iter(const SymbolMap *m, void *ctx,
     if (!slot_empty(&m->slots[i]))
       cb(ctx, &m->slots[i].vars[0]);
 }
+*/

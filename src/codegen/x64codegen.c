@@ -337,7 +337,7 @@ size_t codegen_expr(CUPModule *buf, X64Reg treg, X64Reg sreg) {
     case N_VARIABLE: {
       value = getNode(buf).value;
       buf->state->nodes.value = value;
-      CVariable* var = symmap_get(&buf->state->symmap, value);
+      CVariable* var = getVarScoped(buf->state, value, CVARS_MAX);
       //CVariable* var = &(buf->state->vars)[value];
       buf->state->variable = var;
       emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));

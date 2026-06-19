@@ -78,7 +78,7 @@ const CUPType* cup_type_put(CUPState *state, const CUPType* type) {
     size_t len = sizeof(str) - 1;   /* exclude null terminator */ \
     if (total < maxlen) { \
         size_t copy = len < (maxlen - total) ? len : (maxlen - total) - 1; \
-        memcpy(s + total, str, copy); \
+        memcpy(s + total, str, copy + 1); \
         total += copy; \
     } \
 } while (0)

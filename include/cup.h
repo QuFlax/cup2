@@ -13,6 +13,13 @@
 #include <stdarg.h>
 #include <string.h>
 
+typedef struct CVariable {
+    const CUPType *type; /**< Variable type */
+    //size_t name;         /**< Offset into string-intern table */
+    size_t value;         /**< Variable value / symbol address */
+    size_t scope;
+} CVariable;
+
 /* ========================================================================== */
 /*                           MEMORY HELPERS                                   */
 /* ========================================================================== */
@@ -97,7 +104,8 @@ void fpush_vector(CVector *dest, CVector src);   /* consumes src */
 /* ========================================================================== */
 /*                           SYMBOL HASH MAP                                  */
 /* ========================================================================== */
-/*
+
+/* TODO: change to true
  * Open-addressing Robin Hood hash map.
  * Key:   size_t name_idx  (interned name offset; SIZE_MAX = empty sentinel)
  * Value: CVariable        (type, name, value) stored inline — no separate array
@@ -106,28 +114,44 @@ void fpush_vector(CVector *dest, CVector src);   /* consumes src */
  * Robin Hood invariant keeps probe distances short.
  */
 
-#define SYMMAP_EMPTY    SIZE_MAX
-#define SYMMAP_LOAD_NUM 3   /* grow when count*4 > capacity*3  (75 %) */
-#define SYMMAP_LOAD_DEN 4
-#define SYMMAP_VAR_DEPTH 16
+#define CMAP_LOAD_NUM 3   /* grow when count*4 > capacity*3  (75 %) */
+#define CMAP_LOAD_DEN 4
 
-typedef struct CVariable {
-    const CUPType *type; /**< Variable type */
-    size_t name;         /**< Offset into string-intern table */
-    size_t value;         /**< Variable value / symbol address */
-    size_t scope;
-} CVariable;
+size_t map_hash(size_t key);
 
+typedef struct CMap {
+  void    *slots; // {key, dist, value}
+  size_t  count;    /* live entries */
+  size_t  capacity; /* slot count, always a power of two */
+} CMap;
 
+typedef void (*map_iter_callback)(void *ctx, size_t key, size_t dist, const void *slot);
+
+void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default);
+void map_free(CMap *m);
+void *map_get(const CMap *m, size_t key, size_t v_size, size_t k_null);
+void *map_put(CMap *m, size_t key, void *value, size_t v_size, size_t k_null);
+/* Remove an entry (used when popping scopes). */
+void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
+/* Iterate every live entry; cb receives each CVariable* in insertion order. */
+void       map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, size_t k_null);
+
+#define CVARS_MAX 4
+
+typedef struct CVARS {
+    CVariable vars[CVARS_MAX];
+} CVARS;
+
+/*
 typedef struct SymEntry {
-  size_t    dist; /* Robin Hood probe distance; 0 on empty slot */
-  CVariable vars[SYMMAP_VAR_DEPTH];  /* var.name == SYMMAP_EMPTY means the slot is free */
+  size_t    dist;  Robin Hood probe distance; 0 on empty slot 
+  CVariable vars[SYMMAP_VAR_DEPTH];  var.name == SYMMAP_EMPTY means the slot is free
 } SymEntry;
 
 typedef struct SymbolMap {
   SymEntry *slots;
-  size_t    count;    /* live entries */
-  size_t    capacity; /* slot count, always a power of two */
+  size_t    count;     live entries 
+  size_t    capacity; slot count, always a power of two 
 } SymbolMap;
 
 static inline int slot_empty(const SymEntry *s) {
@@ -136,15 +160,16 @@ static inline int slot_empty(const SymEntry *s) {
 
 void       symmap_init(SymbolMap *m);
 void       symmap_free(SymbolMap *m);
-/* Insert or update; returns pointer to the stored CVariable (stable until next grow). */
-CVariable *symmap_put(SymbolMap *m, size_t name_idx, const CUPType *type, size_t value, size_t depth);
-/* Returns pointer to the stored CVariable, or NULL if not found. */
+ Insert or update; returns pointer to the stored CVariable (stable until next grow). 
+void       symmap_put(SymbolMap *m, size_t name_idx, const CUPType *type, size_t value, size_t depth);
+ Returns pointer to the stored CVariable, or NULL if not found. 
 CVariable *symmap_get(const SymbolMap *m, size_t name_idx);
-/* Remove an entry (used when popping scopes). */
+ Remove an entry (used when popping scopes).
 void       symmap_del(SymbolMap *m, size_t name_idx);
-/* Iterate every live entry; cb receives each CVariable* in insertion order. */
+Iterate every live entry; cb receives each CVariable* in insertion order. 
 void       symmap_iter(const SymbolMap *m, void *ctx,
                        void (*cb)(void *ctx, const CVariable *var));
+*/
 
 /* ========================================================================== */
 /*                           TOKEN / NODE TYPES                               */
@@ -200,6 +225,11 @@ typedef union Nodes {
     };
     CVector vec;
 } Nodes;
+
+#define CUPDEFPOWER 2
+
+void importModule(CUPState* state);
+void externalModule(CUPState* state);
 
 const char       *node_name(Node n);
 size_t defTypeEx(CUPState *state, const Node *nodes,
@@ -306,7 +336,7 @@ struct CUPState {
     CUPModuleList *modules;
 
     /* Variable table */
-    SymbolMap symmap;
+    CMap symmap;
 
     CTypes     types;
     CUPTarget *target;
@@ -316,5 +346,9 @@ struct CUPState {
 
 static_assert(sizeof(CUPState) == 128,
               "CUPState size must be 128 bytes");
+
+CVARS* getVars(CUPState *state, size_t name);
+CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope);
+
 
 #endif /* CUP_H */

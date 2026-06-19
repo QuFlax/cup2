@@ -189,8 +189,8 @@ int cup_add_symbol(CUPState *state, const char *name, void *val,
 CVariable *cup_get_symbol(CUPState *state, const char *name);
 
 void* cup_var_value(CVariable* var);
-const char* cup_var_name(CUPState* state, CVariable* var);
-const CUPType* cup_var_type(CUPState* state, const CVariable* var);
+//const char* cup_var_name(CUPState* state, CVariable* var);
+//const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
 typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const size_t val, const CUPType *type);
 
