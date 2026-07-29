@@ -87,6 +87,37 @@ char *cup_vsprintf(const char *format, va_list args) {
   }
 }
 
+size_t next_power_of_2(size_t n) {
+  if (n <= 1)
+    return n;
+  n--;
+  n |= n >> 1;
+  n |= n >> 2;
+  n |= n >> 4;
+  n |= n >> 8;
+  n |= n >> 16;
+  n |= n >> 32;
+  return n + 1;
+}
+
+#define TEMP_CAP 2048
+
+thread_local static size_t temppos = 0;
+thread_local static uint8_t tempmem[TEMP_CAP + TEMP_CAP] = {};
+
+void* talloc(size_t size) {
+  size_t pos = size + temppos;
+  if (pos > TEMP_CAP) {
+    cup_error("MAX");
+    exit(1);
+  }
+  return tempmem + temppos;
+}
+
+void treset(size_t size) {
+  temppos = size;
+}
+
 /* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
 /* ========================================================================== */
@@ -100,6 +131,20 @@ static void vector_resize(CVector *vec, size_t needed) {
   vec->capacity = cap;
 }
 
+void vector_fpop(CVector *vec, size_t elem_size) {
+  assert(vec && elem_size > 0);
+  assert(vec->size >= elem_size);
+  if (vec->size > elem_size) {
+    memmove(vec->data,
+      (char *)vec->data + elem_size,
+      vec->size - elem_size);
+  } else {
+    cup_free(vec->data);
+  }
+
+  vec->size -= elem_size;
+}
+
 void vector_push(CVector *vec, const void *data, size_t sizeT) {
   assert(sizeT > 0 && data != NULL);
   vector_resize(vec, vec->size + sizeT);
@@ -108,8 +153,9 @@ void vector_push(CVector *vec, const void *data, size_t sizeT) {
 }
 
 void push_vector(CVector *dest, CVector src) {
+  if (!src.data) return;
   vector_push(dest, src.data, src.size);
-  if (src.data) cup_free(src.data);
+  cup_free(src.data);
 }
 
 void vector_fpush(CVector *vec, const void *data, size_t sizeT) {
@@ -174,7 +220,11 @@ void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default) {
 */
 }
 void map_free(CMap *m) {
-  (void)m;
+  if (m == NULL) return;
+  cup_free(m->slots);
+  m->slots = NULL;
+  m->count = 0;
+  m->capacity = 0;
 }
 static void cmap_grow(CMap *m, size_t v_size, size_t k_null) {
   size_t    new_cap   = m->capacity * 2;

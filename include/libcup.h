@@ -25,9 +25,9 @@ extern "C" {
 /* Error codes */
 #define CUP_ERR_CTYPE               NULL
 #define CUP_ERR_MEMORY              -1
-#define CUP_ERR_ARGUMENTS           -2
-#define CUP_ERR_FILE_NOT_FOUND      -3
-#define CUP_ERR_FILE_NOT_RECOGNIZED -4
+// #define CUP_ERR_ARGUMENTS           -2
+// #define CUP_ERR_FILE_NOT_FOUND      -3
+// #define CUP_ERR_FILE_NOT_RECOGNIZED -4
 
 /* Backwards-compat alias for the old typo */
 #define CUP_ERR_MOMORY CUP_ERR_MEMORY
@@ -35,6 +35,11 @@ extern "C" {
 #define CUP_API
 #define CUP_EXTERN extern CUP_API
 
+int cup_version_major();
+int cup_version_minor();
+int cup_version();
+
+typedef union Node Node;
 typedef struct CUPState  CUPState;
 typedef struct CUPModule CUPModule;
 
@@ -86,15 +91,31 @@ typedef enum CUP_TYPE {
     CUP_TYPE_POINTER,
     CUP_TYPE_ARRAY,
     CUP_TYPE_FUNCTION,
-    CUP_TYPECOUNT
+    CUP_TYPE_GENERATOR,
+    CUP_TYPE_COUNT
 } CUP_TYPE;
 
-typedef struct CUPType {
+typedef struct CUPType CUPType;
+
+typedef struct CVariable {
+    const struct CUPType *type; /**< Variable type */
+    //size_t name;         /**< Offset into string-intern table */
+    size_t value;         /**< Variable value / symbol address */
+    size_t scope;
+} CVariable;
+
+//typedef CValue (*CUP_Type_Gen)(CUPState* state, CVariable *var, CValue args, size_t i, size_t max);
+typedef struct CValue (*CUP_Type_Gen)(CUPState* state, struct CValue* argv, size_t argc);
+
+struct CUPType {
     size_t size;
     uint16_t alignment;
     uint16_t realtype;
-    const struct CUPType **elements;
-} CUPType;
+    union {
+        const struct CUPType **elements;
+        CUP_Type_Gen gen;
+    };
+};
 
 CUP_EXTERN CUPType cup_type_void;
 CUP_EXTERN CUPType cup_type_int;
@@ -109,37 +130,53 @@ CUP_EXTERN CUPType cup_type_sint32;
 CUP_EXTERN CUPType cup_type_uint64;
 CUP_EXTERN CUPType cup_type_sint64;
 
-#define cup_type_struct(...) \
-    (CUPType){ 0, 0, CUP_TYPE_STRUCT, \
-        (const CUPType *[]){ __VA_ARGS__, NULL } }
-
-#define cup_type_pointer(type) \
-    (CUPType){ 0, 0, CUP_TYPE_POINTER, \
-        (const CUPType *[]){ (type), NULL } }
-
-#define cup_type_array(type) \
-    (CUPType){ 0, 0, CUP_TYPE_ARRAY, \
-        (const CUPType *[]){ (type), NULL } }
-
-#define cup_type_function(rtype, ...) \
+#define cup_type_pointer(_type) \
     (CUPType){ \
-        sizeof(void *), \
-        (uint16_t)sizeof(void *), \
-        CUP_TYPE_FUNCTION, \
-        (const CUPType *[]){ \
-            (rtype), \
-            __VA_ARGS__, \
+        .size = __SIZEOF_POINTER__, \
+        .alignment = (uint16_t)sizeof(void *), \
+        .realtype = CUP_TYPE_POINTER, \
+        .elements = (const CUPType *[]){ \
+            (_type), \
             NULL \
         } \
     }
 
-typedef struct CVariable CVariable;
+#define cup_type_array(_type, _size) \
+    (CUPType){ \
+        .size = _size, \
+        .alignment = 0, \
+        .realtype = CUP_TYPE_ARRAY, \
+        .elements = (const CUPType *[]){ \
+            (_type), \
+            NULL \
+        } \
+    }
+
+#define cup_type_generator(_func, ...) \
+    (CUPType){ \
+        .size = 0, \
+        .alignment = 0, \
+        .realtype = CUP_TYPE_GENERATOR, \
+        .gen = (_func) \
+    }
+
+#define cup_type_function(_type, ...) \
+    (CUPType){ \
+        .size = sizeof(void *), \
+        .alignment = (uint16_t)sizeof(void *), \
+        .realtype = CUP_TYPE_FUNCTION, \
+        .elements = (const CUPType *[]){ \
+            (_type), \
+            __VA_ARGS__, \
+            &cup_type_void \
+        } \
+    }
 
 /** @brief Return a human-readable name for a type (freshly allocated). */
 size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
 //char *cup_type_name(const CUPType *type);
 
-const uint8_t *getdata(CUPState *state, const char *str, size_t len);
+const uint8_t *getData(CUPState *state, size_t i);
 const char    *getString(CUPState *state, size_t index);
 
 /* ========================================================================== */
@@ -188,7 +225,7 @@ int cup_add_symbol(CUPState *state, const char *name, void *val,
  */
 CVariable *cup_get_symbol(CUPState *state, const char *name);
 
-void* cup_var_value(CVariable* var);
+//void* cup_var_value(CVariable* var);
 //const char* cup_var_name(CUPState* state, CVariable* var);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
@@ -201,11 +238,19 @@ void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);
 /*                              COMPILATION                                   */
 /* ========================================================================== */
 
+const char* cup_bytecode_path(CUPState* state, const char* path);
+const char* cup_code_path(CUPState* state, const char* path);
+
+void cup_write_bytecode(CUPState* state, CUPModule* m);
+void cup_write_code(CUPState* state, CUPModule *m);
+
 /** @brief Compile source from a NUL-terminated string. */
-int cup_compile_string(CUPState *state, const char *source);
+//int cup_compile_string(CUPState *state, const char *source);
+CUPModule* cup_compile_string(CUPState *state, const char *source);
 
 /** @brief Compile source from a file. */
-int cup_compile_file(CUPState *state, const char *filename);
+//int cup_compile_file(CUPState *state, const char *filename);
+CUPModule* cup_compile_file(CUPState *state, const char *filename);
 
 /** @brief Write an ELF64 relocatable object file. */
 int cup_output_object(CUPState *state, const char *filename);

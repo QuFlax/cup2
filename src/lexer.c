@@ -36,9 +36,13 @@ static int strindex(const char *str, const char c) {
 /*                         STRING INTERNING                                   */
 /* ========================================================================== */
 
+const uint8_t *getData(CUPState *state, size_t i) {
+  return state->data + i;
+}
+
 const uint8_t* getdata(CUPState* state, const char* str, size_t len) {
   if (state->data_size < len) return 0;
-  for (uint8_t* i = state->data + state->data_size - len; (uint8_t*)str >= state->data; i--) {
+  for (uint8_t* i = state->data + state->data_size - len; i >= state->data; i--) {
     if (memcmp(i, str, len) == 0)
       return i;
   }
@@ -90,31 +94,31 @@ const char *getString(CUPState *state, size_t index) {
  */
 uint8_t *idToken(CUPState *state, const char *str, size_t len) {
   if (len == 2 && memcmp(str, "if", 2) == 0) {
-    state->type = T_IF;
+    state->nodes.token = T_IF;
     return NULL;
   }
   if (len == 3 && memcmp(str, "for", 3) == 0) {
-    state->type = T_FOR;
+    state->nodes.token = T_FOR;
     return NULL;
   }
   if (len == 4 && memcmp(str, "else", 4) == 0) {
-    state->type = T_ELSE;
+    state->nodes.token = T_ELSE;
     return NULL;
   }
   if (len == 5 && memcmp(str, "break", 5) == 0) {
-    state->type = T_BREAK;
+    state->nodes.token = T_BREAK;
     return NULL;
   }
   if (len == 5 && memcmp(str, "while", 5) == 0) {
-    state->type = T_WHILE;
+    state->nodes.token = T_WHILE;
     return NULL;
   }
   if (len == 6 && memcmp(str, "return", 6) == 0) {
-    state->type = T_RETURN;
+    state->nodes.token = T_RETURN;
     return NULL;
   }
   if (len == 8 && memcmp(str, "continue", 8) == 0) {
-    state->type = T_CONTINUE;
+    state->nodes.token = T_CONTINUE;
     return NULL;
   }
   uint8_t *current = state->names - 1;
@@ -139,7 +143,7 @@ uint8_t *idToken(CUPState *state, const char *str, size_t len) {
         state->names[len] = '\0';
         state->names += len + 1;
       }
-      state->type = T_IDENTIFIER;
+      state->nodes.token = T_IDENTIFIER;
       return keyword;
     }
     state->nodes.value++;
@@ -283,7 +287,7 @@ void getToken(CUPState *state) {
     state->priv_stream = state->input_stream;
 
   while (state->priv_stream != state->input_stream)
-    nextChar(&state->priv_stream, &state->loc);
+    nextChar(&state->priv_stream, &state->nodes.node.loc);
 
   union {
     int i;
@@ -293,20 +297,20 @@ void getToken(CUPState *state) {
   for (u.temp = state->input_stream;
     *state->input_stream == ' ' || *state->input_stream == '\t';
     state->input_stream++); 
-  state->loc.col += (state->input_stream - u.temp);
+  state->nodes.node.loc.col += (state->input_stream - u.temp);
   state->priv_stream = state->input_stream;
   char input_char = *state->input_stream;
 
   /* End of file */
   if (input_char == '\0') {
-    state->type = T_EOF;
+    state->nodes.token = T_EOF;
     return;
   }
 
   /* String literals */
   if (input_char == '"') {
-    state->type = T_STRING;
-    state->loc.col++;
+    state->nodes.token = T_STRING;
+    state->nodes.node.loc.col++;
     u.temp = ++state->input_stream;
     while (*state->input_stream != '\0' && *state->input_stream != '"') {
       state->input_stream++;
@@ -322,16 +326,17 @@ void getToken(CUPState *state) {
     state->data = (uint8_t*)cup_realloc(state->data, state->data_size + len + 1);
     memcpy(state->data + state->data_size, u.temp, len);
     state->data[state->data_size + len] = '\0';
+    state->nodes.value = state->data_size;
     state->data_size += len + 1;
     return;
   }
   /* Numbers */
   if (input_char == '0' && zeroChar(state, state->input_stream + 1)) {
-    state->type = T_NUMBER;
+    state->nodes.token = T_NUMBER;
     return;
   }
   if (input_char >= '0' && input_char <= '9') {
-    state->type = T_NUMBER;
+    state->nodes.token = T_NUMBER;
     state->nodes.value = numberChar(state);
     return;
   }
@@ -340,35 +345,35 @@ void getToken(CUPState *state) {
     if (*(++state->input_stream) == '.') {
       if (state->input_stream[1] == '.') {
         state->input_stream += 2;
-        state->type = T_VARG;
+        state->nodes.token = T_VARG;
         return;
       }
     }
-    state->type = T_DOT;
+    state->nodes.token = T_DOT;
     return;
   }
   /* Newline */
   u.i = newlineChar(state->input_stream);
   if (u.i) {
     state->input_stream += u.i;
-    state->type = T_NL;
+    state->nodes.token = T_NL;
     return;
   }
   /* Operators that can be doubled (+=, ==, etc.) */
   u.i = strindex("+-*/%&|<>^!=", input_char);
   if (u.i != -1) {
     if (*(++state->input_stream) != '=') {
-      state->type = types1[u.i];
+      state->nodes.token = types1[u.i];
       return;
     }
-    state->type = doubles[u.i];
+    state->nodes.token = doubles[u.i];
     return;
   }
   /* Single-character delimiters */
   u.i = strindex("(){}[].,:;#?@$\\~", input_char);
   if (u.i != -1) {
     state->input_stream++;
-    state->type = types2[u.i];
+    state->nodes.token = types2[u.i];
     return;
   }
   /* Keywords and identifiers */
@@ -387,6 +392,6 @@ void getToken(CUPState *state) {
 void skipSpaces(CUPState *state) {
   while (*state->input_stream == ' ' || *state->input_stream == '\t' ||
          *state->input_stream == '\n' || *state->input_stream == '\r')
-    nextChar(&state->input_stream, &state->loc);
+    nextChar(&state->input_stream, &state->nodes.node.loc);
   getToken(state);
 }

@@ -7,63 +7,11 @@
 #define CUP_H
 
 #include "libcup.h"
-#include <assert.h>
+#include "libcupext.h"
+
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <string.h>
-
-typedef struct CVariable {
-    const CUPType *type; /**< Variable type */
-    //size_t name;         /**< Offset into string-intern table */
-    size_t value;         /**< Variable value / symbol address */
-    size_t scope;
-} CVariable;
-
-/* ========================================================================== */
-/*                           MEMORY HELPERS                                   */
-/* ========================================================================== */
-
-/*
- * Do NOT redefine malloc/free/calloc as macros — it breaks system headers
- * included after this file and makes calloc unusable as an expression.
- * Use the cup_* prefixed wrappers everywhere inside the compiler.
- */
-#define cup_free(x)          cup_realloc((x), 0)
-#define cup_malloc(x)        cup_realloc(NULL, (x))
-#define cup_alloc(name, T) \
-    do { name = (T*)cup_malloc(sizeof(T)); memset(name, 0, sizeof(T)); } while (0)
-
-/* cup_calloc(ptr, size): allocate `size` bytes and zero them.
- * Usage:  MyType *p; cup_calloc(p, sizeof(MyType)); */
-#define cup_calloc(v, size) \
-    do { (v) = cup_malloc(size); memset((v), 0, (size)); } while (0)
-
-char *cup_vsprintf(const char *format, va_list args);
-char *cup_sprintf(const char *format, ...);
-char *cup_strdup(const char *str);
-
-/* ========================================================================== */
-/*                           LOGGING HELPERS                                  */
-/* ========================================================================== */
-
-#define cup_warnf(f, ...) \
-    do { \
-        char *_msg = cup_sprintf((f), __VA_ARGS__); \
-        cup_log(CUP_Level_WARN, _msg); \
-        cup_free(_msg); \
-    } while (0)
-
-#define cup_warn(msg)  cup_log(CUP_Level_WARN, (msg))
-
-#define cup_errorf(f, ...) \
-    do { \
-        char *_msg = cup_sprintf((f), __VA_ARGS__); \
-        cup_log(CUP_Level_ERRO, _msg); \
-        cup_free(_msg); \
-    } while (0)
-
-#define cup_error(msg) cup_log(CUP_Level_ERRO, (msg))
 
 /* ========================================================================== */
 /*                           DEBUG LOGGING                                    */
@@ -82,24 +30,7 @@ char *cup_strdup(const char *str);
 #  define cup_dbg(msg)     ((void)0)
 #endif
 
-/* ========================================================================== */
-/*                           DYNAMIC VECTORS                                  */
-/* ========================================================================== */
 
-/** Generic dynamic array. */
-typedef struct CVector {
-    void  *data;
-    size_t size;
-    size_t capacity;
-} CVector;
-
-void vector_push (CVector *vec, const void *data, size_t elem_size);
-void vector_fpush(CVector *vec, const void *data, size_t elem_size);
-void push_vector (CVector *dest, CVector src);   /* consumes src */
-void fpush_vector(CVector *dest, CVector src);   /* consumes src */
-
-#define vector_pushT(vec, val)  vector_push (&(vec), &(val), sizeof(val))
-#define vector_fpushT(vec, val) vector_fpush(&(vec), &(val), sizeof(val))
 
 /* ========================================================================== */
 /*                           SYMBOL HASH MAP                                  */
@@ -132,44 +63,9 @@ void map_free(CMap *m);
 void *map_get(const CMap *m, size_t key, size_t v_size, size_t k_null);
 void *map_put(CMap *m, size_t key, void *value, size_t v_size, size_t k_null);
 /* Remove an entry (used when popping scopes). */
-void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
+//void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
 /* Iterate every live entry; cb receives each CVariable* in insertion order. */
 void       map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, size_t k_null);
-
-#define CVARS_MAX 4
-
-typedef struct CVARS {
-    CVariable vars[CVARS_MAX];
-} CVARS;
-
-/*
-typedef struct SymEntry {
-  size_t    dist;  Robin Hood probe distance; 0 on empty slot 
-  CVariable vars[SYMMAP_VAR_DEPTH];  var.name == SYMMAP_EMPTY means the slot is free
-} SymEntry;
-
-typedef struct SymbolMap {
-  SymEntry *slots;
-  size_t    count;     live entries 
-  size_t    capacity; slot count, always a power of two 
-} SymbolMap;
-
-static inline int slot_empty(const SymEntry *s) {
-  return s->vars[0].name == SYMMAP_EMPTY;
-}
-
-void       symmap_init(SymbolMap *m);
-void       symmap_free(SymbolMap *m);
- Insert or update; returns pointer to the stored CVariable (stable until next grow). 
-void       symmap_put(SymbolMap *m, size_t name_idx, const CUPType *type, size_t value, size_t depth);
- Returns pointer to the stored CVariable, or NULL if not found. 
-CVariable *symmap_get(const SymbolMap *m, size_t name_idx);
- Remove an entry (used when popping scopes).
-void       symmap_del(SymbolMap *m, size_t name_idx);
-Iterate every live entry; cb receives each CVariable* in insertion order. 
-void       symmap_iter(const SymbolMap *m, void *ctx,
-                       void (*cb)(void *ctx, const CVariable *var));
-*/
 
 /* ========================================================================== */
 /*                           TOKEN / NODE TYPES                               */
@@ -184,47 +80,50 @@ enum CTType_ {
 typedef uint16_t CTType;
 
 #define N_VARIABLE T_IDENTIFIER
+#define N_FUNCTION T_AT
 
 extern const char *token_names[];
 
 /** Source location for error reporting. */
 typedef struct {
-    CTType   type;
+    CTType   token;
     uint16_t col;
     uint32_t line;
 } Loc;
 
-typedef union {
-    CTType type;
-    Loc    loc;
-} Token;
-
 /** Single AST node. */
-typedef union {
-    Token  token;
-    CTType type;
+union Node {
+    CTType token;
     Loc    loc;
     size_t value;
     double dvalue;
-} Node;
+    CVariable  *variable;
+    const CUPType* vtype;
+};
+
+CVecT(Node);
 
 /** Node + optional payload (number value / string index). */
 typedef struct Node2 {
-    Node   node;
     union {
+        CTType token;
+        CVariable  *variable;
+        Node       node;
+    };
+    union {
+        const CUPType* vtype;
         size_t value;
         double dvalue;
     };
 } Node2;
 
-typedef union Nodes {
-    struct {
-        Node  *data;
-        size_t size;
-        size_t capacity;
-    };
-    CVector vec;
-} Nodes;
+static inline Node* getNode(NRange *cc) {
+  if (cc->it >= cc->end) {
+    cup_error("Incorrect Nodes");
+    exit(1);
+  }
+  return cc->it++;
+}
 
 #define CUPDEFPOWER 2
 
@@ -232,13 +131,7 @@ void importModule(CUPState* state);
 void externalModule(CUPState* state);
 
 const char       *node_name(Node n);
-size_t defTypeEx(CUPState *state, const Node *nodes,
-                             size_t *pos, const CUPType **value);
-size_t defType(CUPState *state, const Node *nodes,
-                          const CUPType **value);
-const CUPType    *cup_type_get(CUPState *state, const CUPType* type);
-const CUPType    *cup_type_put(CUPState *state, const CUPType* type);
-void codegen_func(CUPModule* buf, size_t *value, size_t i);
+//size_t defTypeEx(CUPState *state, const Node *nodes, size_t *pos, const CUPType **value);
 
 typedef union CTypes {
     struct {
@@ -262,39 +155,13 @@ void skipSpaces(CUPState *state);
 /*                           CODE EMISSION                                    */
 /* ========================================================================== */
 
-typedef struct CRealloc {
-    size_t         *var;
-    size_t          ptr;
-} CRealloc;
-
-typedef union CReallocs {
-    struct {
-        CRealloc *data;
-        size_t    size;
-        size_t    capacity;
-    };
-    CVector vec;
-} CReallocs;
-
-struct CUPModule {
-    CUPState *state;
-    uint8_t  *data;
-    size_t    size;
-    struct {
-        Node *it;
-        Node *end;
-    };
-    CReallocs reallocs;
-};
-
-static_assert(sizeof(CUPModule) == (8 * sizeof(size_t)),
-              "CUPModule size must be 8 bytes");
-
-typedef struct _CUPModuleList {
-    CUPModule             module;
-    const char           *path;
-    struct _CUPModuleList *next;
+typedef struct CUPModuleList {
+    CUPModule            module;
+    struct CUPModuleList *next;
 } CUPModuleList;
+
+//typedef struct CExternal { void *handle; } CExternal;
+//CVecT(CExternal);
 
 void emit_error(CUPModule *buf, size_t nbytes);
 void emit      (CUPModule *buf, const void *value, size_t size);
@@ -314,14 +181,24 @@ struct CUPState {
     const char *priv_stream;
 
     /* Current parser token / node */
+    union  {
+        Node2      nodes;
+        CVariable  *variable;
+        //CValue     value_;
+    };
+    /*
     union {
-        CVariable *variable;
+        struct {
+            CVariable  *variable;
+            const CUPType *vtype;
+        };
         Token      token;
         CTType     type;
         Loc        loc;
         Node       node;
         Node2      nodes;
     };
+    */
 
     /* String intern table.
      * names_base: original allocation pointer (needed for safe getString walk
@@ -335,17 +212,43 @@ struct CUPState {
 
     CUPModuleList *modules;
 
+    union {
+        struct { void **data; size_t size; size_t capacity; };
+        CVector vec;
+    } externals;
+    //CExternals externals;
+
     /* Variable table */
     CMap symmap;
 
     CTypes     types;
     CUPTarget *target;
     size_t scope;
-    //CUPCodeGen generator;
+    const char* bytecode_path;
+    const char* code_path;
+    size_t l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11;
+    // CUPCodeGen generator;
 };
 
-static_assert(sizeof(CUPState) == 128,
-              "CUPState size must be 128 bytes");
+// 1 2 4 8 16 32 64 128 256
+static_assert(sizeof(CUPState) == 256,
+               "CUPState size must be 256 bytes");
+
+
+#define CVARS_MAX 4
+
+/*
+typedef struct CVariable {
+    const CUPType *type; // < Variable type
+    //size_t name;       // < Offset into string-intern table
+    size_t value;        // < Variable value / symbol address
+    size_t scope;
+} CVariable;
+*/
+
+typedef struct CVARS {
+    CVariable vars[CVARS_MAX];
+} CVARS;
 
 CVARS* getVars(CUPState *state, size_t name);
 CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope);

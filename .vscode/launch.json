@@ -6,7 +6,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/cup",
-            "args": ["test.txt"],
+            "args": ["-i", "-b", "test.txt"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],
@@ -18,7 +18,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceFolder}/build/cup",
-            "args": ["test.txt"],
+            "args": ["-i", "-b", "test.txt"],
             "cwd": "${workspaceFolder}",
             "sourceMap": {
                 "/build/": "${workspaceFolder}"

@@ -4,6 +4,11 @@
             "cwd": "/home/quflax/cup",
             "binaryPath": "/home/quflax/cup/cup",
             "binaryArgs": []
+        },
+        {
+            "cwd": "/home/quflax/cup/build",
+            "binaryPath": "/home/quflax/cup/build/cup",
+            "binaryArgs": []
         }
     ],
     "lldb.displayFormat": "auto",

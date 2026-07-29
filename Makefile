@@ -6,8 +6,10 @@ SRC_DIR := src
 LIB_NAME := libcup
 CUP_NAME := cup
 
-CFLAGS := -ggdb -Wall -Wextra -fsanitize=memory -O0 -I. -I./include
-LDFLAGS := -lm
+# -fsanitize=memory
+CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -fsanitize=memory
+# -lm
+LDFLAGS := 
 
 SRC_FILES := \
 	$(SRC_DIR)/lexer.c \
@@ -15,7 +17,8 @@ SRC_FILES := \
 	$(SRC_DIR)/utils.c \
 	$(SRC_DIR)/types.c \
 	$(SRC_DIR)/moduler.c \
-	$(SRC_DIR)/codegen/x64codegen.c
+	$(SRC_DIR)/codegen/x64codegen.c \
+	$(SRC_DIR)/typechecker.c
 
 OBJ_FILES := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRC_FILES))
 
