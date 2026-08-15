@@ -1,4 +1,5 @@
 #include "../include/cup.h"
+
 //#include <threads.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -24,6 +25,7 @@ void* cup_var_value(CVariable* var) {
     return NULL;
   return (void*)var->value;
 }
+/*
 const CUPType* cup_var_type(CUPState* state, const CVariable* var) {
   if (state == NULL || var == NULL)
     return NULL;
@@ -31,6 +33,7 @@ const CUPType* cup_var_type(CUPState* state, const CVariable* var) {
     return NULL;
   return var->type;
 }
+*/
 
 Nodes primary(CUPState *state, uint8_t mpower);
 
@@ -321,7 +324,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
     DTypes[argc + 1] = &cup_type_void;
-    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, { DTypes } };
+    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, DTypes };
     const CUPType *type = cup_type_put(state, fn_t);
     cup_type_snname(tname, sizeof(tname), type);
     printf("defType function type = %s\n", tname);

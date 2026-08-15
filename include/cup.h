@@ -7,7 +7,6 @@
 #define CUP_H
 
 #include "libcup.h"
-#include "libcupext.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -117,13 +116,7 @@ typedef struct Node2 {
     };
 } Node2;
 
-static inline Node* getNode(NRange *cc) {
-  if (cc->it >= cc->end) {
-    cup_error("Incorrect Nodes");
-    exit(1);
-  }
-  return cc->it++;
-}
+Node* getNode(struct NRange *cc);
 
 #define CUPDEFPOWER 2
 
@@ -226,7 +219,8 @@ struct CUPState {
     size_t scope;
     const char* bytecode_path;
     const char* code_path;
-    size_t l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11;
+    NRange range;
+    size_t l1, l2, l3, l4, l5, l6, l7, l8, l9;
     // CUPCodeGen generator;
 };
 
@@ -253,5 +247,8 @@ typedef struct CVARS {
 CVARS* getVars(CUPState *state, size_t name);
 CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope);
 
+const char *get_exe_path(void);
+void *allocMemory(size_t size);
+int samefile(const char *a, const char *b);
 
 #endif /* CUP_H */

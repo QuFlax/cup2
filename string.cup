@@ -1,0 +1,7 @@
+~"libc" rand "i()" srand "v(i)"
+
+str_len(src) {
+    return 0
+}
+
+return {}

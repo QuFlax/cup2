@@ -100,6 +100,7 @@ size_t next_power_of_2(size_t n) {
   return n + 1;
 }
 
+/*
 #define TEMP_CAP 2048
 
 thread_local static size_t temppos = 0;
@@ -116,6 +117,34 @@ void* talloc(size_t size) {
 
 void treset(size_t size) {
   temppos = size;
+}
+*/
+
+void emit_error(CUPModule *buf, size_t size) {
+  size_t capacity = PAGESIZE;
+  if (buf == NULL)
+  {
+    cup_error("emit_error: buf is NULL");
+    exit(1);
+  }
+  if (buf->data == NULL)
+    buf->data = (uint8_t *)cup_malloc(capacity);
+  buf->size += size;
+  if (buf->size > capacity)
+  {
+    do
+    {
+      capacity += PAGESIZE;
+    } while (buf->size > capacity);
+    buf->data = (uint8_t *)cup_realloc(buf->data, capacity);
+  }
+}
+void emit(CUPModule *buf, const void *value, size_t size) {
+  if (buf == NULL)
+    return;
+  size_t offset = buf->size;
+  emit_error(buf, size);
+  memcpy(buf->data + offset, value, size);
 }
 
 /* ========================================================================== */
@@ -309,10 +338,21 @@ void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, siz
   size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
   for (size_t i = 0; i < m->capacity; i++) {
     size_t *slot = m->slots + i * kdv_size;
-    if (*slot != k_null)
-      cb(ctx, *slot, slot[1], (void*)(slot + 2));
+    if (*slot == k_null) continue;
+    cb(ctx, *slot, slot[1], (void*)(slot + 2));
   }
 }
+
+#include "libcupext.h"
+Node* getNode(struct NRange *cc) {
+  if (cc->it >= cc->end) {
+    cup_error("Incorrect Nodes");
+    exit(1);
+  }
+  return cc->it++;
+}
+
+
 
 /*
 void symmap_del(SymbolMap *m, size_t name_idx) {

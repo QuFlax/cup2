@@ -1,50 +1,78 @@
 #include "../include/cup.h"
 // #include <threads.h>
 
-#include <dlfcn.h>
-#ifndef _WIN32
-#include <sys/mman.h>
-#endif
-
-int cup_version_major() { return 1; }
-int cup_version_minor() { return 12; }
-int cup_version() { return cup_version_minor() | (cup_version_major() * 0xFF); }
-
-Nodes statement(CUPState *state);
-
-void *allocMemory(size_t size) {
 #ifdef _WIN32
+#include <windows.h>
+
+const char *get_exe_path(void) {
+  static char path[MAX_PATH];
+  DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
+  if (len == 0 || len == MAX_PATH)
+    return NULL;
+  path[len] = '\0';
+  return path;
+}
+void *allocMemory(size_t size) {
   void *ptr = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-  if (!ptr)
-  {
-    fprintf(stderr, "VirtualAlloc failed: %lu\n", GetLastError());
-    exit(1);
-  }
-  return ptr;
+  if (ptr != NULL)
+    return ptr;
+  WORD err = GetLastError();
+  char *msg = NULL;
+  FormatMessageA(
+    FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+    NULL, err, 0, (LPSTR)&msg, 0, NULL
+  );
+  fprintf(stderr, "VirtualAlloc failed: %lu: %s\n", (unsigned long)err, msg ? msg : "Unknown error");
+  exit(1);
+  return NULL; // Unreachable, but avoids compiler warning
+}
+int samefile(const char *a, const char *b) {
+  //TODO: windows stuf
+  return 0;
+}
+
 #else
+#include <dlfcn.h>
+#include <unistd.h>
+
+#include <linux/limits.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+const char *get_exe_path(void) {
+  static char path[PATH_MAX];
+  size_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (len < 0)
+    return NULL;
+  path[len] = '\0';
+  return path;
+}
+void *allocMemory(size_t size) {
   void *mem = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mem != MAP_FAILED)
     return mem;
   perror("mmap failed");
   exit(1);
-#endif
+  return NULL; // Unreachable, but avoids compiler warning
 }
-
-static int samefile(const char *a, const char *b) {
-#if 0
-  //TODO: windows stuf
-  return 0;
-#else
-#include <sys/stat.h>
+int samefile(const char *a, const char *b) {
   if (!a || *a == '\0' || !b || *b == '\0')
     return 0;
   struct stat sa, sb;
   if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
     return 0;
   return (sa.st_ino == sb.st_ino) && (sa.st_dev == sb.st_dev);
-#endif
 }
+
+#endif
+
+int cup_version_major() { return 1; }
+int cup_version_minor() { return 12; }
+int cup_version() { return cup_version_minor() | (cup_version_major() * 0xFF); }
+
+
+Nodes statement(CUPState *state);
 
 void importModule(CUPState *state) {
   // CUPState copy;
@@ -66,7 +94,7 @@ void externalModule(CUPState *state) {
   const uint8_t *name = getData(state, state->nodes.value);
   size_t len = strlen((char*)name);
   size_t ext = sizeof(so) + 2;
-  char* base = talloc(len + 1 + ext);
+  char* base = cup_malloc(len + 1 + ext);
   memcpy(base, name, len);
   memset(base + len, 0, 1 + ext);
   if (memcmp(base + len - sizeof(so), so, sizeof(so)) != 0)
@@ -84,6 +112,7 @@ void externalModule(CUPState *state) {
     exit(1);
   }
   vector_pushT(state->externals.vec, external);
+  cup_free(base);
 }
 
 void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
@@ -98,8 +127,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
     if (fn)
       break;
   }
-  if (!fn)
-  {
+  if (fn == NULL) {
     cup_errorf("external: symbol '%s' not found in any loaded library", name);
     exit(1);
   }
@@ -133,33 +161,19 @@ void printVar(void *ctx, size_t key, size_t dist, const void *v)
   //           0, "str", tname, v->value, (void*)v->value, v->scope);
 }
 
-void printNodes(FILE *out, CUPModule *buf, CUPState *state)
-{
-  for (Node *it = buf->range.it; it != buf->range.end; it++)
-  {
+void printNodes(FILE *out, const NRange range, CUPState *state) {
+  for (Node *it = range.it; it != range.end; it++) {
+    const char* name = token_names[it->token];
     if (it->token == N_BLOCK || it->token == T_NUMBER || it->token == T_COMMA)
-    {
-      fprintf(out, "%s - ", token_names[it->token]);
-      fprintf(out, "%ld\n", (++it)->value);
-    }
+      fprintf(out, "%s - %ld\n", name, (++it)->value);
     else if (it->token == T_IDENTIFIER)
-    {
-      fprintf(out, "%s - ", token_names[it->token]);
-      fprintf(out, "%s\n", getString(state, (++it)->value));
-    }
+      fprintf(out, "%s - %s\n", name, getString(state, (++it)->value));
     else if (it->token == T_EQ || it->token == T_CALL)
-    {
-      fprintf(out, "%s\n", token_names[it->token]);
-    }
+      fprintf(out, "%s\n", name);
     else if (it->token == T_STRING || it->token == T_MSTRING)
-    {
-      fprintf(out, "%s - ", token_names[it->token]);
-      fprintf(out, "\"%s\"\n", getData(state, (++it)->value));
-    }
+      fprintf(out, "%s - \"%s\"\n", name, getData(state, (++it)->value));
     else
-    {
-      fprintf(out, "%s (%ld)\n", token_names[it->token], it->value);
-    }
+      fprintf(out, "%s (%ld)\n", name, it->value);
   }
 }
 void printInstructions(FILE *out, CUPModule *m)
@@ -176,12 +190,11 @@ void printInstructions(FILE *out, CUPModule *m)
   // fprintf(out, "-- end --\n");
 }
 
-void codegen(CUPState *state, CUPModuleList *m, Nodes nodes)
-{
+void codegen(CUPState *state, CUPModuleList *m) {
   size_t init = 0;
+  const NRange range = state->range;
   codegen_func(state, &m->module, &init, 0);
-  m->module.range.it = nodes.data;
-  m->module.range.end = (Node *)((char *)m->module.range.it + nodes.size);
+  state->range = range;
   void *page = allocMemory(m->module.size);
   memcpy(page, m->module.data, m->module.size);
   cup_free(m->module.data);
@@ -220,14 +233,10 @@ void codegen(CUPState *state, CUPModuleList *m, Nodes nodes)
   printf("r = %p\n", r);
 }
 
-CUPModule *parse(CUPState *state, const char *buf, const char *file)
-{
-  if (file)
-  {
-    for (CUPModuleList *it = state->modules; it; it = it->next)
-      if (samefile(it->module.path, file))
-        return &it->module;
-  }
+CUPModule *parse(CUPState *state, const char *buf, const char *file) {
+  for (CUPModuleList *it = state->modules; it; it = it->next)
+    if (samefile(it->module.path, file))
+      return &it->module;
   CUPModuleList *m;
   cup_calloc(m, CUPModuleList);
   m->module.path = cup_strdup(file);
@@ -240,22 +249,15 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file)
 
   state->priv_stream = NULL;
   state->input_stream = buf;
-  state->nodes.node.loc.col = 1;
-  state->nodes.node.loc.line = 1;
-  // m->state = state;
-
-  Nodes nodes = {};
-  // Loc ttt = {N_BLOCK, 1, 1};
   state->nodes = (Node2){};
   state->nodes.node.loc = (Loc){N_BLOCK, 1, 1};
-  // state->nodes = (Node2){ {{N_BLOCK}, {}, 1}, 0 };
-  // state->nodes = (Node2){{N_BLOCK, 1, 1},{0}};
-  vector_pushT(nodes.vec, state->nodes);
-  state->scope++;
 
+  Nodes nodes = {};
+  vector_pushT(nodes.vec, state->nodes);
+
+  state->scope++;
   skipSpaces(state);
-  while (state->nodes.token != T_EOF)
-  {
+  while (state->nodes.token != T_EOF) {
     Nodes n = statement(state);
     if (n.data)
       nodes.data[1].value++;
@@ -263,26 +265,9 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file)
   }
   state->scope--;
 
-  // printNodes(m, state);
-  // return;
-
-  /*
-    char tname[256];
-    CValue type = {};
-    type = defType(state, m->range);
-    if (type.type) {
-      cup_type_snname(tname, sizeof(tname), type.type);
-      printf("type = %s\n", tname);
-    }
-  */
-
-  // map_iter(&state->symmap, state, printVar, sizeof(CVARS), SIZE_MAX);
-  // return;
-
-  m->module.range.it = nodes.data;
-  m->module.range.end = (Node *)((char *)m->module.range.it + nodes.size);
-  if (defType(state, m->module.range) == 0) {
-    codegen(state, m, nodes);
+  state->range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+  if (defType(state, state->range) == 0) {
+    codegen(state, m);
   }
 
   state->priv_stream = priv_stream;
@@ -314,7 +299,7 @@ void cup_write_bytecode(CUPState *state, CUPModule *m) {
     cup_errorf("Could not open bytecode output '%s'", filename);
     return;
   }
-  printNodes(f, m, state);
+  printNodes(f, state->range, state);
   fclose(f);
   cup_free(generated);
 }
@@ -332,33 +317,6 @@ void cup_write_code(CUPState* state, CUPModule *m) {
   printInstructions(f, m);
   fclose(f);
   cup_free(generated);
-}
-
-void emit_error(CUPModule *buf, size_t size) {
-  size_t capacity = PAGESIZE;
-  if (buf == NULL)
-  {
-    cup_error("emit_error: buf is NULL");
-    exit(1);
-  }
-  if (buf->data == NULL)
-    buf->data = (uint8_t *)cup_malloc(capacity);
-  buf->size += size;
-  if (buf->size > capacity)
-  {
-    do
-    {
-      capacity += PAGESIZE;
-    } while (buf->size > capacity);
-    buf->data = (uint8_t *)cup_realloc(buf->data, capacity);
-  }
-}
-void emit(CUPModule *buf, const void *value, size_t size) {
-  if (buf == NULL)
-    return;
-  size_t offset = buf->size;
-  emit_error(buf, size);
-  memcpy(buf->data + offset, value, size);
 }
 
 CUPState *cup_new(int target)
@@ -391,7 +349,6 @@ void cup_delete(CUPState *state)
       munmap(m->module.data, m->module.size);
 #endif
     cup_free((void *)m->module.path);
-    cup_free(m->module.range.it);
     cup_free(m->module.reallocs.data);
     cup_free(m);
     m = next;
@@ -414,6 +371,7 @@ void cup_delete(CUPState *state)
   }
 
   map_free(&state->symmap);
+  cup_free(state->range.it);
   cup_free(state->data);
   cup_free(state);
 }
@@ -422,7 +380,10 @@ CUPModule *cup_compile_string(CUPState *state, const char *buf)
 {
   if (state == NULL || buf == NULL || *buf == '\0')
     return NULL;
-  return parse(state, buf, NULL);
+  const char *filename = get_exe_path();
+  if (filename == NULL)
+    return NULL;
+  return parse(state, buf, filename);
 }
 CUPModule *cup_compile_file(CUPState *state, const char *filename)
 {
@@ -482,26 +443,20 @@ CVariable *cup_get_symbol(CUPState *state, const char *name)
   return getVarScoped(state, state->nodes.value, CVARS_MAX);
 }
 
-struct LLLT
-{
-  CUPState *state;
-  cup_list_symbols_callback cb;
-  void *ctx;
-};
-
-void lll(void *ctx, size_t key, size_t dist, const void *v)
-{
-  struct LLLT *l = (struct LLLT *)ctx;
-  (void)dist;
-  CVariable var = ((CVARS *)v)->vars[0];
-  l->cb(l->ctx, getString(l->state, key), var.value, var.type);
-}
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb)
 {
   if (state == NULL)
     return;
   if (!state->symmap.slots)
     return;
-  struct LLLT l = {state, cb, ctx};
-  map_iter(&state->symmap, &l, lll, sizeof(CVARS), SIZE_MAX);
+  //struct LLLT l = {state, cb, ctx};
+  //map_iter(&state->symmap, &l, lll, sizeof(CVARS), SIZE_MAX);
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + sizeof(CVARS);
+  for (size_t i = 0; i < state->symmap.capacity; i++) {
+    size_t *slot = state->symmap.slots + i * kdv_size;
+    if (*slot == SIZE_MAX) continue;
+    //lll(ctx, *slot, slot[1], (void*)(slot + 2));
+    CVariable var = ((CVARS *)(slot + 2))->vars[0];
+    cb(ctx, getString(state, slot[1]), var.value, var.type);
+  }
 }

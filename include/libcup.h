@@ -95,7 +95,8 @@ typedef enum CUP_TYPE {
     CUP_TYPE_COUNT
 } CUP_TYPE;
 
-typedef struct CUPType CUPType;
+#undef CUPType
+#define CUPType CUPTypePrimitive
 
 typedef struct CVariable {
     const struct CUPType *type; /**< Variable type */
@@ -104,18 +105,12 @@ typedef struct CVariable {
     size_t scope;
 } CVariable;
 
-//typedef CValue (*CUP_Type_Gen)(CUPState* state, CVariable *var, CValue args, size_t i, size_t max);
-typedef struct CValue (*CUP_Type_Gen)(CUPState* state, struct CValue* argv, size_t argc);
-
-struct CUPType {
+typedef struct CUPTypePrimitive {
     size_t size;
     uint16_t alignment;
     uint16_t realtype;
-    union {
-        const struct CUPType **elements;
-        CUP_Type_Gen gen;
-    };
-};
+    const struct CUPType **elements;
+} CUPTypePrimitive;
 
 CUP_EXTERN CUPType cup_type_void;
 CUP_EXTERN CUPType cup_type_int;
@@ -150,14 +145,6 @@ CUP_EXTERN CUPType cup_type_sint64;
             (_type), \
             NULL \
         } \
-    }
-
-#define cup_type_generator(_func, ...) \
-    (CUPType){ \
-        .size = 0, \
-        .alignment = 0, \
-        .realtype = CUP_TYPE_GENERATOR, \
-        .gen = (_func) \
     }
 
 #define cup_type_function(_type, ...) \
