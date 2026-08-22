@@ -208,6 +208,17 @@ static void emit_setle_reg(CUPModule *buf, X64Reg reg) {
   emit_modrm(buf, 3, 0, reg);
 }
 
+// SETL reg(set if less)
+static void emit_setl_reg(CUPModule *buf, X64Reg reg) {
+#if DEBUG_LOG
+    printf("OP: setl %s\n", X64Reg_names[reg]);
+#endif
+  emit_rex(buf, 0, reg);
+  emit8(buf, 0x0F);
+  emit8(buf, 0x9C);
+  emit_modrm(buf, 3, 0, reg);
+}
+
 // RET
 static void emit_ret(CUPModule *buf) {
 #if DEBUG_LOG
@@ -227,34 +238,29 @@ static void emit_call_reg(CUPModule *buf, X64Reg reg) {
   emit_modrm(buf, 3, 2, reg);
 }
 
-/*
+static void emit_jmp_reg(CUPModule *buf, X64Reg reg) {
+  if (reg >= 8)
+    emit8(buf, 0x41);
+
+  emit8(buf, 0xFF);
+  emit_modrm(buf, 3, 4, reg); // /4 = JMP r/m64
+}
+
 // JMP rel32
-static void emit_jmp_rel32(CUPModule *buf, int32_t offset) {
+static void emit_jmp_rel32(CUPModule *buf) {
 #if DEBUG_LOG
-    printf("OP: jmp %d\n", offset);
+    printf("OP: jmp rel32\n");
 #endif
   emit8(buf, 0xE9);
-  emit32(buf, offset);
 }
 
 // JE rel32 (jump if equal)
-static void emit_je_rel32(CUPModule *buf, int32_t offset) {
+static void emit_je_rel32(CUPModule *buf) {
 #if DEBUG_LOG
-    printf("OP: je %d\n", offset);
+    printf("OP: je rel32\n");
 #endif
   emit8(buf, 0x0F);
   emit8(buf, 0x84);
-  emit32(buf, offset);
-}
-
-// JNE rel32 (jump if not equal)
-static void emit_jne_rel32(CUPModule *buf, int32_t offset) {
-#if DEBUG_LOG
-    printf("OP: jne %d\n", offset);
-#endif
-  emit8(buf, 0x0F);
-  emit8(buf, 0x85);
-  emit32(buf, offset);
 }
 
 // TEST reg, reg
@@ -265,6 +271,24 @@ static void emit_test_reg_reg(CUPModule *buf, X64Reg reg1, X64Reg reg2) {
   emit_rexw(buf, reg1, reg2);
   emit8(buf, 0x85);
   emit_modrm(buf, 3, reg1, reg2);
+}
+
+static void emit_movzx_eax_al(CUPModule *buf) {
+  emit8(buf, 0x0F);
+  emit8(buf, 0xB6);
+  emit8(buf, 0xC0);
+}
+
+/*
+
+// JNE rel32 (jump if not equal)
+static void emit_jne_rel32(CUPModule *buf, int32_t offset) {
+#if DEBUG_LOG
+    printf("OP: jne %d\n", offset);
+#endif
+  emit8(buf, 0x0F);
+  emit8(buf, 0x85);
+  emit32(buf, offset);
 }
 
 // MOV [rbp+offset], reg (store variable)
@@ -299,15 +323,31 @@ static void emit_mov_reg_mem(CUPModule *buf, X64Reg dst, int32_t offset) {
 
 #endif
 
+static int32_t patch_rel(size_t patch, size_t target) {
+  int64_t delta = (int64_t)target - (int64_t)(patch + sizeof(int32_t));
+  if (delta < INT32_MIN || delta > INT32_MAX) {
+    cup_error("relative branch target is out of range");
+    exit(1);
+  }
+  return (int32_t)delta;
+}
+
 static void codegen_op(CUPModule *buf, X64Reg target, X64Reg temp_reg, const CTType type) {
   switch (type) {
+  case T_LESS:
+    emit_cmp_reg_reg(buf, target, temp_reg);
+    emit_setl_reg(buf, target);
+    emit_movzx_eax_al(buf);
+    break;
   case T_LESSEQ:
     emit_cmp_reg_reg(buf, target, temp_reg);
     emit_setle_reg(buf, target);
+    emit_movzx_eax_al(buf);
     break;
   case T_EQEQ:
     emit_cmp_reg_reg(buf, target, temp_reg);
     emit_sete_reg(buf, target);
+    emit_movzx_eax_al(buf);
     break;
   case T_MUL:
     emit_imul_reg_reg(buf, target, temp_reg);
@@ -318,41 +358,103 @@ static void codegen_op(CUPModule *buf, X64Reg target, X64Reg temp_reg, const CTT
   case T_SUB:
     emit_sub_reg_reg(buf, target, temp_reg);
     break;
+  default:
+    cup_error("codegen_op: UN");
+    exit(1);
   }
 }
 
-size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
+static inline Node* getNode(NRange *cc) {
+  if (cc->it >= cc->end) {
+    cup_error("Incorrect Nodes");
+    exit(1);
+  }
+  return cc->it++;
+}
+
+size_t codegen_expr(CUPState* state, CUPModule *buf,
+  X64Reg treg, X64Reg sreg,
+  CVariable **rvalue) {
   assert(buf != NULL);
-  CTType ntype = getNode(&state->range)->token;
+  CTType ntype = getNode(&buf->range)->token;
   //cup_errorf("codegen node '%s'", token_names[ntype]);
   size_t value = 0;
   switch (ntype) {
     case N_BLOCK:
     case T_COMMA:
-      return getNode(&state->range)->value;
+      return getNode(&buf->range)->value;
+    case T_OSB: {
+      X64Reg temp_reg = R10;
+      if (codegen_expr(state, buf, treg, sreg, NULL)) {
+        cup_error("N_OP 1 codegen left is multiple values");
+        exit(1);
+      }
+      emit_push_reg(buf, temp_reg);
+      value = codegen_expr(state, buf, temp_reg, temp_reg, NULL);
+      if (value) {
+        cup_error("N_OP 2 codegen right is multiple values");
+        exit(1);
+      }
+      //emit_mov_imm64(buf, R11, 8);
+      //emit_imul_reg_reg(buf, RAX, R10);
+      emit_add_reg_reg(buf, treg, temp_reg);
+      emit_mov_reg_deref(buf, treg, sreg);
+      emit_pop_reg(buf, temp_reg);
+      return 0;
+    }
+    case N_ARRAY: {
+      value = getNode(&buf->range)->value;
+      emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, value));
+      size_t save = buf->size;
+      size_t i = codegen_expr(state, buf, treg, sreg, rvalue);
+      buf->size = save;
+      return i;
+    }
     case T_NUMBER: {
-      emit_mov_reg_imm64(buf, treg, getNode(&state->range)->value);
+      emit_mov_reg_imm64(buf, treg, getNode(&buf->range)->value);
       return 0;
     }
     case T_STRING: {
-      emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, getNode(&state->range)->value));
+      emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, getNode(&buf->range)->value));
       return 0;
     }
     case N_VARIABLE: {
-      value = getNode(&state->range)->value;
-      state->nodes.value = value;
-      CVariable* var = getVarScoped(state, value, CVARS_MAX);
+      value = getNode(&buf->range)->value;
+      //state->nodes.value = value;
+      CVariable* var = getVarScoped(state, value, SIZE_MAX);
       //CVariable* var = &(state->vars)[value];
-      state->nodes.node.variable = var;
+      //state->nodes.variable = var;
+      if (rvalue) *rvalue = var;
       emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
       if (sreg != ANY) {
-        //printf("treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
         emit_mov_reg_deref(buf, treg, sreg);
       }
       return 0;
     }
+    case T_ADDEQ: {
+      size_t i = codegen_expr(state, buf, RBX, ANY, NULL);
+      if (i) {
+        cup_error("N_ADDEQ lhs");
+        exit(1);
+      }
+      emit_push_reg(buf, RBX);
+      emit_mov_reg_deref(buf, RAX, RBX);
+      emit_push_reg(buf, RAX);
+      i = codegen_expr(state, buf, RAX, RAX, NULL);
+      if (i) {
+        cup_error("N_ADDEQ rhs");
+        exit(1);
+      }
+      emit_pop_reg(buf, RBX);
+      emit_add_reg_reg(buf, RBX, RAX);
+      emit_pop_reg(buf, RAX);
+      emit_mov_deref_reg(buf, RBX, RAX);
+      if (treg != RBX)
+        emit_mov_reg_reg(buf, treg, RBX);
+      break;
+    }
     case T_EQ: {
-      size_t i = codegen_expr(state, buf, RBX, RBX);
+      size_t i = codegen_expr(state, buf, RBX, RBX, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -361,7 +463,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
         emit_push_reg(buf, RAX);
         emit_push_reg(buf, treg);
       }
-      i = codegen_expr(state, buf, RAX, ANY);
+      i = codegen_expr(state, buf, RAX, ANY, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -375,14 +477,12 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
       }
       break;
     }
-    case T_ADD:
-    case T_SUB:
-    case T_MUL:
-    case T_EQEQ:
+    case T_ADD: case T_SUB: case T_MUL: case T_EQEQ:
+    case T_LESS:
     case T_LESSEQ: {
       X64Reg temp_reg = R10;
       //printf("add1 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      value = codegen_expr(state, buf, treg, sreg);
+      value = codegen_expr(state, buf, treg, sreg, NULL);
       if (value) {
         cup_error("N_OP 1 codegen left is multiple values");
         exit(1);
@@ -397,7 +497,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
       emit_push_reg(buf, temp_reg);
       //emit_push_reg(buf, treg);
       //printf("add2 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      value = codegen_expr(state, buf, temp_reg, temp_reg);
+      value = codegen_expr(state, buf, temp_reg, temp_reg, NULL);
       if (value) {
         cup_error("N_OP 2 codegen right is multiple values");
         exit(1);
@@ -415,19 +515,29 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
       // Caller-saved: RAX, R10, R11, RDI, RSI, RDX, RCX, R8, R9
 
       // const CUPType *type = defType(state, buf->it, NULL);
-      value = codegen_expr(state, buf, RAX, RAX);
+      CVariable* var = NULL;
+      value = codegen_expr(state, buf, RAX, RAX, &var);
       if (value) {
         cup_error("N_CALL 1");
         exit(1);
       }
-      CVariable *fn_var = state->variable;
-      const CUPType *fn_type = fn_var != NULL ? fn_var->type : NULL;
-      if (fn_var == NULL || fn_type == NULL) {
+      const CUPType *fn_type = var != NULL ? var->type : NULL;
+      if (var == NULL || fn_type == NULL) {
         cup_error("T_CALL: missing function variable");
         exit(1);
       }
+      if (fn_type->realtype == CUP_TYPE_GENERATOR) {
+
+      } else if (fn_type->realtype == CUP_TYPE_FUNCTION) {
+        
+      } else {
+        char tname[256];
+        cup_type_snname(tname, sizeof(tname), fn_type);
+        cup_errorf("T_CALL: not Function or Generator get %s", tname);
+        exit(1);
+      }
       emit_push_reg(buf, RAX);
-      size_t count = codegen_expr(state, buf, RAX, RAX);
+      size_t count = codegen_expr(state, buf, RAX, RAX, NULL);
 #if CCHECK
       const CUPType *type = state->nodes.node.variable->type;
       if (type->realtype != CUP_TYPE_GENERATOR) {
@@ -450,14 +560,16 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
 #if DEBUG_LOG
       printf("i = %ld\n", value);
 #endif
-      if (fn_type->realtype == CUP_TYPE_GENERATOR) {
-
-      }
-      for (value = 0; value < count; value++) {
-        if (codegen_expr(state, buf, sysv_arg_regs[value], sysv_arg_regs[value])) {
-          cup_error("N_CALL 1 (REAL)");
-          exit(1);
+      for (size_t i = 0; i < count; i++) {
+        if (codegen_expr(state, buf, RAX, RAX, NULL)) {
+            cup_error("N_CALL ARG");
+            exit(1);
         }
+
+        emit_push_reg(buf, RAX);
+      }
+      for (size_t i = count; i-- > 0;) {
+        emit_pop_reg(buf, sysv_arg_regs[i]);
       }
       emit_pop_reg(buf, RAX);
       emit_call_reg(buf, RAX);
@@ -479,7 +591,8 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
 #if DEBUG_LOG
       printf("--: Save --\n");
 #endif
-      size_t i = codegen_expr(state, buf, RAX, RAX);
+      CVariable* var = NULL;
+      size_t i = codegen_expr(state, buf, RAX, RAX, &var);
 #if DEBUG_LOG
       printf("--: RESTORE --\n");
 #endif
@@ -488,7 +601,6 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
         cup_error("N_FUNCTION 1");
         exit(1);
       }
-      CVariable* var = state->nodes.node.variable;
       if (var->type == NULL) {
         cup_error("N_FUNCTION var type is NULL");
         exit(1);
@@ -502,15 +614,71 @@ size_t codegen_expr(CUPState* state, CUPModule *buf, X64Reg treg, X64Reg sreg) {
       codegen_func(state, buf, &var->value, arg_count);
       return 0;
     }
+    case T_IF: {
+      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
+      if (i) {
+        cup_error("N_IF 1");
+        exit(1);
+      }
+      emit_test_reg_reg(buf, RAX, RAX);
+      emit_je_rel32(buf);
+      size_t patch = buf->size;
+      emit32(buf, 0);
+      size_t count = 1;
+      for (size_t j = 0; j < count; j++) {
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
+        if (i)
+          count += i;
+      }
+      //patch_rel32(buf, patch, buf->size);
+      int64_t delta = (int64_t)buf->size - (int64_t)(patch + sizeof(int32_t));
+      if (delta < INT32_MIN || delta > INT32_MAX) {
+        cup_error("relative branch target is out of range");
+        exit(1);
+      }
+      int32_t rel = (int32_t)delta;
+      memcpy(buf->data + patch, &rel, sizeof(rel));
+
+      return 0;
+    }
+    case T_WHILE: {
+      size_t condition_target = buf->size;
+      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
+      if (i) {
+        cup_error("T_WHILE 1");
+        exit(1);
+      }
+      emit_test_reg_reg(buf, RAX, RAX);
+      emit_je_rel32(buf);
+      size_t if_patch = buf->size;
+      emit32(buf, 0);
+
+      size_t count = 1;
+      for (size_t j = 0; j < count; j++) {
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
+        if (i)
+          count += i;
+      }
+      emit_jmp_rel32(buf);
+      // patch_rel32(buf, back_patch, condition_target);
+      int32_t if_pos = patch_rel(buf->size, condition_target);
+      emiti32(buf, if_pos);
+      //patch_rel32(buf, end_patch, end_target);
+      int32_t end_pos = patch_rel(if_patch, buf->size);
+      memcpy(buf->data + if_patch, &end_pos, sizeof(end_pos));
+      return 0;
+    }
     case T_RETURN: {
-      size_t i = codegen_expr(state, buf, RAX, RAX);
+      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
       if (i) {
         cup_error("N_RETURN 1");
         exit(i);
       }
-      //emit_mov_reg_reg(buf, RSP, RBP);
-      //emit_pop_reg(buf, RBP);
-      //emit_ret(buf);
+      emit_jmp_rel32(buf);
+      printf("RRRRR - %ld : %ld\n", state->nodes.value, buf->size);
+      CRealloc r = { NULL, buf->size };
+      vector_pushT(state->vector_, r);
+      emit32(buf, 0);
       return i;
     }
     default:
@@ -623,29 +791,46 @@ void bufmove512(CUPModule* buf, size_t start, size_t length) {
 */
 
 void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_count) {
+  state->nodes.value = buf->size;
   size_t save = buf->size;
   CRealloc r = {value, 0};
   vector_pushT(buf->reallocs.vec, r);
+  printf("\n--- %ld %ld %ld ---\n", save, buf->size, buf->reallocs.size / sizeof(CRealloc));
 
   emit_push_reg(buf, RBP);
   emit_mov_reg_reg(buf, RBP, RSP);
   emit_xor_reg_reg(buf, RAX, RAX);
 
   if (arg_count) {
-    if (arg_count != codegen_expr(state, buf, RAX, ANY)) {
+    if (arg_count != codegen_expr(state, buf, RAX, ANY, NULL)) {
       exit(17);
     }
     for (size_t j = 0; j < arg_count; j++) {
-      codegen_expr(state, buf, RAX, ANY);
+      codegen_expr(state, buf, RAX, ANY, NULL);
       emit_mov_deref_reg(buf, sysv_arg_regs[j], RAX);
     }
   }
+  size_t reljump_begin = 0;
   size_t count = 1;
   for (size_t j = 0; j < count; j++) {
-    size_t i = codegen_expr(state, buf, RETURN_REG, ANY);
+    size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
     if (i)
       count += i;
   }
+  size_t epilogue = buf->size;
+  size_t reljump_end = state->vector_.size / sizeof(CRealloc);
+  for (size_t i = reljump_begin; i < reljump_end; i++) {
+    CRealloc r = ((CRealloc*)state->vector_.data)[i];
+    int64_t delta = (int64_t)epilogue - (int64_t)(r.ptr + sizeof(int32_t));
+    if (delta < INT32_MIN || delta > INT32_MAX) {
+      cup_error("return jump out of rel32 range");
+      exit(1);
+    }
+    int32_t rel = (int32_t)delta;
+    memcpy(buf->data + r.ptr, &rel, sizeof(rel));
+    printf("VVVVV - %ld : %ld & %i : %ld\n", state->nodes.value, buf->size, rel, r.ptr);
+  }
+  state->vector_.size = 0;
 
   emit_mov_reg_reg(buf, RSP, RBP);
   emit_pop_reg(buf, RBP);
@@ -658,19 +843,11 @@ void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_cou
     return;
   size_t n = buf->size - save;
   bufmove_dynamic(buf, save, n);
-  //if (n < 256) {
-  //  bufmove256(buf, save, n);
-  //} else if (n < 512) {
-  //  cup_error("Function too large for current implementation (max 256 bytes)");
-  //  bufmove512(buf, save, n);
-  //} else {
-  //  cup_error("Function too large for current implementation (max 512 bytes)");
-  //  exit(22);
-  //}
   size_t rcount = buf->reallocs.size / sizeof(CRealloc);
 #if DEBUG_LOG
   printf("\n--- %ld %ld %ld %ld ---\n", n, save, buf->size, rcount);
 #endif
+  printf("\n--- %ld %ld %ld %ld ---\n", n, save, buf->size, rcount);
   rcount--;
   for (size_t j = 0; j < rcount; j++) {
     buf->reallocs.data[j].ptr += n;

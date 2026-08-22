@@ -50,11 +50,10 @@ CVARS* getVars(CUPState *state, size_t name) {
 }
 
 CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope) {
-  assert(maxscope <= CVARS_MAX);
   CVARS* vars = getVars(state, name);
   if (!vars) return NULL;
-  for (size_t s = maxscope; s-- > 0;) {
-    if (vars->vars[s].scope != 0)
+  for (size_t s = CVARS_MAX; s-- > 0;) {
+    if (vars->vars[s].scope != 0 && vars->vars[s].scope <= maxscope)
       return &vars->vars[s];
   }
   return NULL;
@@ -324,7 +323,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
     DTypes[argc + 1] = &cup_type_void;
-    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, DTypes };
+    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, { DTypes } };
     const CUPType *type = cup_type_put(state, fn_t);
     cup_type_snname(tname, sizeof(tname), type);
     printf("defType function type = %s\n", tname);
@@ -334,11 +333,10 @@ Nodes primary(CUPState *state, uint8_t mpower) {
 
     Nodes block = statement(state);
     push_vector(&left.vec, block.vec);
-    state->scope--;
+    state->scope++;
     return left;
   }
-  case T_BREAK:
-  case T_CONTINUE: {
+  case T_BREAK: case T_CONTINUE: {
     vector_pushT(left.vec, state->nodes.node);
     getToken(state);
     break;
@@ -384,10 +382,10 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     }
     vector_pushT(left.vec, name);
     getToken(state);
-    if (state->nodes.token == T_OSB) {
-      cup_error("Subscripts not implemented");
-      exit(1);
-    }
+    //if (state->nodes.token == T_OSB) {
+    //  cup_error("Subscripts not implemented");
+    //  exit(1);
+    //}
     break;
   }
   case T_STRING: {
@@ -437,7 +435,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       }
     }
     getToken(state); // T_CCB
-    state->scope--;
+    state->scope++;
     return left;
   }
   case T_OSB: { // '['
@@ -446,11 +444,30 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     skipSpaces(state);
     if (state->nodes.token != T_CSB) {
       Nodes body = primary(state, CUPDEFPOWER);
-      if (body.data) left.data[1].value++;
-      push_vector(&left.vec, body.vec);
+      if (body.data) {
+        left.data[1].value = (body.data->token == T_COMMA)
+          ? body.data[1].value : 1;
+        push_vector(&left.vec, body.vec);
+      } else {
+        Node2 tempn = {.node = left.data[0]};
+        tempn.token = T_COMMA;
+        tempn.value = 0;
+        vector_pushT(left.vec, tempn);
+      }
+    } else {
+      Node2 tempn = {.node = left.data[0]};
+      tempn.token = T_COMMA;
+      tempn.value = 0;
+      vector_pushT(left.vec, tempn);
     }
-    //if (state->type == T_NL)
-    //  skipSpaces(state);
+    {
+      size_t len = left.data[1].value;
+      len *= sizeof(size_t);
+      left.data[1].value = state->data_size;
+      state->data = (uint8_t*)cup_realloc(state->data, state->data_size + len);
+      memset(state->data + state->data_size, 0, len);
+      state->data_size += len;
+    }
     expectAndNext(T_CSB);
     break;
   }
@@ -495,15 +512,15 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       return left;
     skipSpaces(state);
     Nodes right = {};
-    int norb = opnode.token != T_CALL;
-    if (state->nodes.token != T_CRB || norb)
-      right = primary(state, norb ? power : CUPDEFPOWER);
-    else {
-      printf("N_COMMA 0\n");
+    int norb = opnode.token == T_CALL || opnode.token == T_OSB;
+    if ((opnode.token == T_CALL && state->nodes.token == T_CRB)
+     || (opnode.token == T_OSB && state->nodes.token == T_CSB)) {
       Node2 tempn = opnode;
       tempn.token = T_COMMA;
       tempn.value = 0;
       vector_pushT(right.vec, tempn);
+    } else {
+      right = primary(state, norb ? CUPDEFPOWER : power);
     }
 
     switch (opnode.token) {
@@ -543,11 +560,17 @@ Nodes primary(CUPState *state, uint8_t mpower) {
         vector_fpop(&right.vec, sizeof(opnode));
       break;
     }
-    case T_ADD:
-    case T_EQEQ:
-    case T_MUL:
-    case T_LESSEQ:
-    case T_SUB: {
+    case T_OSB: {
+      if (state->nodes.token != T_CSB) {
+        cup_errorf("Expected T_CSB, but got %s", token_names[state->nodes.token]);
+        exit(1);
+      }
+      getToken(state);
+      //expectAndNext(T_CSB);
+      vector_fpushT(left.vec, opnode.node);
+      break;
+    }
+    case T_ADD: case T_ADDEQ: case T_EQEQ: case T_LESS: case T_MUL: case T_LESSEQ: case T_SUB: {
       vector_fpushT(left.vec, opnode.node);
       break;
     }

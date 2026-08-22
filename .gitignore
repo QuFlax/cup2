@@ -7,3 +7,6 @@ cup.elf
 *.so
 test.txt
 fib.c
+test.b
+test.i
+cod.c

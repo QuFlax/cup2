@@ -76,7 +76,8 @@ const CUPType* cup_type_put(CUPState *state, const CUPType type) {
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
       newt->elements = (const CUPType **)(newt + 1);
-      newt->elements[i] = cup_type_put(state, *type.elements[i]);
+      if (type.elements[i])
+        newt->elements[i] = cup_type_put(state, *type.elements[i]);
     } else if (type.realtype == CUP_TYPE_POINTER) {
       size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);

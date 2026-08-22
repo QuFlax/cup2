@@ -26,8 +26,8 @@ char *cup_vsprintf(const char *format, va_list args);
 char *cup_sprintf(const char *format, ...);
 char *cup_strdup(const char *str);
 
-void* talloc(size_t size);
-void treset(size_t size);
+//void* talloc(size_t size);
+//void treset(size_t size);
 
 /* ========================================================================== */
 /*                           LOGGING HELPERS                                  */
@@ -62,11 +62,12 @@ typedef struct CVector {
     size_t capacity;
 } CVector;
 
-void vector_fpop(CVector *vec, size_t elem_size);
-void vector_push (CVector *vec, const void *data, size_t elem_size);
-void vector_fpush(CVector *vec, const void *data, size_t elem_size);
+void vector_fpop(CVector *vec, size_t sizeT);
+void vector_push (CVector *vec, const void *data, size_t sizeT);
+void vector_fpush(CVector *vec, const void *data, size_t sizeT);
 void push_vector (CVector *dest, CVector src);   /* consumes src */
 void fpush_vector(CVector *dest, CVector src);   /* consumes src */
+CVector split_vector(CVector *vec, size_t index);
 
 #define vector_pushT(vec, val)  vector_push (&(vec), &(val), sizeof(val))
 #define vector_fpushT(vec, val) vector_fpush(&(vec), &(val), sizeof(val))
@@ -103,97 +104,20 @@ struct CUPModule {
     uint8_t    *data;
     size_t     size;
     CReallocs  reallocs;
-    size_t l1, l2;
+    NRange     range;
 };
 
 static_assert(sizeof(struct CUPModule) == (8 * sizeof(size_t)),
               "CUPModule size must be 4 bytes");
 
-typedef struct CValue {
-    const struct CUPType *type;
-    void *value;
-} CValue;
-
 CVecT(CValue);
 
 void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_count);
 
-int defType(CUPState *state, const NRange nodes);
 const CUPType    *cup_type_get(CUPState *state, const CUPType type);
 const CUPType    *cup_type_put(CUPState *state, const CUPType type);
 const CUPType    *cup_type_parse(CUPState* state, const char* sig);
 
 void externalSymbol(CUPState* state, size_t name_idx, size_t sig_idx);
-
-typedef struct CUP_GEN_CTX {
-    const struct CUPType *argtype;
-    void                 *argvalue;
-    void                 *userctx;
-} CUP_GEN_CTX;
-
-typedef enum CUP_GEN_RESULT {
-    CUP_GEN_ERROR = -1,
-    CUP_GEN_CONTINUE = 0,
-    CUP_GEN_DONE   = 1
-} CUP_GEN_RESULT;
-
-
-typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
-    CValue arg, size_t i, size_t max, struct CValue* rvalue);
-
-#undef CUPType
-#define CUPType CUPTypeComplex
-
-typedef struct CUPTypeComplex {
-    size_t size;
-    uint16_t alignment;
-    uint16_t realtype;
-    union {
-        const struct CUPType **elements;
-        CUP_Type_Gen gen;
-    };
-} CUPTypeComplex;
-
-#define cup_type_generator(_func, ...) \
-    (CUPType){ \
-        .size = 0, \
-        .alignment = 0, \
-        .realtype = CUP_TYPE_GENERATOR, \
-        .gen = (_func) \
-    }
-
-#define cup_type_pointer(_type) \
-    (CUPType){ \
-        .size = __SIZEOF_POINTER__, \
-        .alignment = (uint16_t)sizeof(void *), \
-        .realtype = CUP_TYPE_POINTER, \
-        .elements = (const CUPType *[]){ \
-            (_type), \
-            NULL \
-        } \
-    }
-
-#define cup_type_array(_type, _size) \
-    (CUPType){ \
-        .size = _size, \
-        .alignment = 0, \
-        .realtype = CUP_TYPE_ARRAY, \
-        .elements = (const CUPType *[]){ \
-            (_type), \
-            NULL \
-        } \
-    }
-
-#define cup_type_function(_type, ...) \
-    (CUPType){ \
-        .size = sizeof(void *), \
-        .alignment = (uint16_t)sizeof(void *), \
-        .realtype = CUP_TYPE_FUNCTION, \
-        .elements = (const CUPType *[]){ \
-            (_type), \
-            __VA_ARGS__, \
-            &cup_type_void \
-        } \
-    }
 
 #endif

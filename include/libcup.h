@@ -74,6 +74,30 @@ void cup_set_error_func(CUP_Log_Fn error_func);
 /*                              TYPE SYSTEM                                   */
 /* ========================================================================== */
 
+typedef struct CUPType CUPType;
+typedef struct CVariable CVariable;
+
+typedef struct CValue {
+    const CUPType *type;
+    void *value;
+    CVariable *variable;
+} CValue;
+
+typedef struct CUP_GEN_CTX {
+    const CUPType *argtype;
+    void                 *argvalue;
+    void                 *userctx;
+} CUP_GEN_CTX;
+
+typedef enum CUP_GEN_RESULT {
+    CUP_GEN_ERROR = -1,
+    CUP_GEN_CONTINUE = 0,
+    CUP_GEN_DONE   = 1
+} CUP_GEN_RESULT;
+
+typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
+    CValue* args, size_t max, struct CValue* rvalue);
+
 typedef enum CUP_TYPE {
     CUP_TYPE_VOID,
     CUP_TYPE_INT,
@@ -95,22 +119,16 @@ typedef enum CUP_TYPE {
     CUP_TYPE_COUNT
 } CUP_TYPE;
 
-#undef CUPType
-#define CUPType CUPTypePrimitive
-
-typedef struct CVariable {
-    const struct CUPType *type; /**< Variable type */
-    //size_t name;         /**< Offset into string-intern table */
-    size_t value;         /**< Variable value / symbol address */
-    size_t scope;
-} CVariable;
-
-typedef struct CUPTypePrimitive {
+struct CUPType {
     size_t size;
     uint16_t alignment;
     uint16_t realtype;
-    const struct CUPType **elements;
-} CUPTypePrimitive;
+    union {
+        const CUPType **elements;
+        CUP_Type_Gen gen;
+    };
+};
+
 
 CUP_EXTERN CUPType cup_type_void;
 CUP_EXTERN CUPType cup_type_int;
@@ -159,9 +177,24 @@ CUP_EXTERN CUPType cup_type_sint64;
         } \
     }
 
+#define cup_type_generator(_func, ...) \
+    (CUPType){ \
+        .size = 0, \
+        .alignment = 0, \
+        .realtype = CUP_TYPE_GENERATOR, \
+        .gen = (_func) \
+    }
+
 /** @brief Return a human-readable name for a type (freshly allocated). */
 size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
 //char *cup_type_name(const CUPType *type);
+
+struct CVariable {
+    const CUPType *type; /**< Variable type */
+    //size_t name;         /**< Offset into string-intern table */
+    size_t value;         /**< Variable value / symbol address */
+    size_t scope;
+};
 
 const uint8_t *getData(CUPState *state, size_t i);
 const char    *getString(CUPState *state, size_t index);

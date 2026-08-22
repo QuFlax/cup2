@@ -18,7 +18,7 @@
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceFolder}/build/cup",
-            "args": ["-i", "-b", "test.txt"],
+            "args": ["-b", "test.b", "-i", "test.i", "test.txt"],
             "cwd": "${workspaceFolder}",
             "sourceMap": {
                 "/build/": "${workspaceFolder}"

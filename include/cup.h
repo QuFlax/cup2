@@ -7,10 +7,13 @@
 #define CUP_H
 
 #include "libcup.h"
+#include "libcupext.h"
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+
+#define CUPDEFPOWER 2
 
 /* ========================================================================== */
 /*                           DEBUG LOGGING                                    */
@@ -116,10 +119,6 @@ typedef struct Node2 {
     };
 } Node2;
 
-Node* getNode(struct NRange *cc);
-
-#define CUPDEFPOWER 2
-
 void importModule(CUPState* state);
 void externalModule(CUPState* state);
 
@@ -144,6 +143,8 @@ uint8_t       *idToken(CUPState *state, const char *str, size_t len);
 void getToken  (CUPState *state);
 void skipSpaces(CUPState *state);
 
+int defType(CUPState *state, Nodes* nodes);
+
 /* ========================================================================== */
 /*                           CODE EMISSION                                    */
 /* ========================================================================== */
@@ -164,6 +165,8 @@ void emit      (CUPModule *buf, const void *value, size_t size);
 #define emit32(buf, v) do { uint32_t _v = (v); emit((buf), &_v, 4); } while (0)
 #define emit64(buf, v) do { uint64_t _v = (v); emit((buf), &_v, 8); } while (0)
 
+#define emiti32(buf, v) do { int32_t _v = (v); emit((buf), &_v, 4); } while (0)
+
 /* ========================================================================== */
 /*                           COMPILER STATE                                   */
 /* ========================================================================== */
@@ -174,24 +177,12 @@ struct CUPState {
     const char *priv_stream;
 
     /* Current parser token / node */
-    union  {
-        Node2      nodes;
-        CVariable  *variable;
-        //CValue     value_;
+    union
+    {
+        Node2 nodes;
+        CVariable *variable;
     };
-    /*
-    union {
-        struct {
-            CVariable  *variable;
-            const CUPType *vtype;
-        };
-        Token      token;
-        CTType     type;
-        Loc        loc;
-        Node       node;
-        Node2      nodes;
-    };
-    */
+    size_t scope;
 
     /* String intern table.
      * names_base: original allocation pointer (needed for safe getString walk
@@ -201,26 +192,28 @@ struct CUPState {
 
     /* General data (string literal storage) */
     uint8_t *data;
-    size_t   data_size;
+    size_t data_size;
 
     CUPModuleList *modules;
 
     union {
-        struct { void **data; size_t size; size_t capacity; };
+        struct {
+            void **data;
+            size_t size;
+            size_t capacity;
+        };
         CVector vec;
     } externals;
-    //CExternals externals;
 
     /* Variable table */
     CMap symmap;
 
-    CTypes     types;
+    CTypes types;
     CUPTarget *target;
-    size_t scope;
-    const char* bytecode_path;
-    const char* code_path;
-    NRange range;
-    size_t l1, l2, l3, l4, l5, l6, l7, l8, l9;
+    const char *bytecode_path;
+    const char *code_path;
+    CVector vector_;
+    size_t l1, l2, l3, l4, l5, l6, l7, l8;
     // CUPCodeGen generator;
 };
 

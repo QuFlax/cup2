@@ -133,7 +133,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
   }
 
   const CUPType *type = cup_type_parse(state, (const char *)sig);
-  CVariable *v = getVarScoped(state, state->nodes.value, 1);
+  CVariable *v = getVarScoped(state, state->nodes.value, SIZE_MAX);
   if (v)
   {
     cup_errorf("Cannot add symbol(%s) because it already exist", name);
@@ -190,23 +190,27 @@ void printInstructions(FILE *out, CUPModule *m)
   // fprintf(out, "-- end --\n");
 }
 
-void codegen(CUPState *state, CUPModuleList *m) {
+void codegen(CUPState *state, CUPModule *m, const NRange range) {
   size_t init = 0;
-  const NRange range = state->range;
-  codegen_func(state, &m->module, &init, 0);
-  state->range = range;
-  void *page = allocMemory(m->module.size);
-  memcpy(page, m->module.data, m->module.size);
-  cup_free(m->module.data);
-  m->module.data = page;
+  //const NRange range = state->range;
+  state->vector_ = (CVector){};
+  codegen_func(state, m, &init, 0);
+  m->range = range;
+  void *page = allocMemory(m->size);
+  memcpy(page, m->data, m->size);
+  cup_free(m->data);
+  m->data = page;
 
-  CRealloc *rptr = m->module.reallocs.data;
-  for (size_t i = m->module.reallocs.size / sizeof(CRealloc); i--;)
+  CRealloc *rptr = m->reallocs.data;
+  for (size_t i = m->reallocs.size / sizeof(CRealloc); i--;)
   {
     CRealloc rr = rptr[i];
     printf("[%ld] %ld %p ", i, rr.ptr, rr.var);
-    printf("before = %zx ", *rr.var);
-    *rr.var = (size_t)(page + rr.ptr);
+    if (rr.var) {
+      *rr.var = (size_t)(page + rr.ptr);
+      printf("before = %hhx", *(uint8_t*)*rr.var);
+      printf("after = %zx\n", *rr.var);
+    }
     // if (m->data[rr.ptr] == 0x55) {
     // printf("BR: %ld\n", *rr.var);
     //*rr.var = (size_t)(m->data + rr.ptr);
@@ -215,7 +219,6 @@ void codegen(CUPState *state, CUPModuleList *m) {
     // if (m->data[rr.ptr] == 0) {
     // memcpy(m->data + rr.ptr, rr.var, sizeof(size_t));
     //}
-    printf("after = %zx\n", *rr.var);
   }
   // printf("\n------\n");
   // for (size_t i = 0; i < m->size; i++) {
@@ -263,11 +266,12 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
       nodes.data[1].value++;
     push_vector(&nodes.vec, n.vec);
   }
-  state->scope--;
+  //state->scope--;
 
-  state->range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
-  if (defType(state, state->range) == 0) {
-    codegen(state, m);
+  m->module.range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+  if (defType(state, &nodes) == 0) {
+    NRange nr = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+    codegen(state, &m->module, nr);
   }
 
   state->priv_stream = priv_stream;
@@ -299,7 +303,17 @@ void cup_write_bytecode(CUPState *state, CUPModule *m) {
     cup_errorf("Could not open bytecode output '%s'", filename);
     return;
   }
-  printNodes(f, state->range, state);
+  size_t i = 0;
+  while (1) {
+    const char* t = getString(state, i);
+    if (t == NULL || *t == '\0') break;
+    fprintf(f, "[%ld] %s\n", i++, t);
+  }
+  for (i = 0; i < state->data_size; i++)
+    fputc(*getData(state, i), f);
+    //fprintf(f, "%hhx", *getData(state, i));
+  fputc('\n', f);
+  printNodes(f, m->range, state);
   fclose(f);
   cup_free(generated);
 }
@@ -350,6 +364,7 @@ void cup_delete(CUPState *state)
 #endif
     cup_free((void *)m->module.path);
     cup_free(m->module.reallocs.data);
+    cup_free(m->module.range.it);
     cup_free(m);
     m = next;
   }
@@ -371,7 +386,6 @@ void cup_delete(CUPState *state)
   }
 
   map_free(&state->symmap);
-  cup_free(state->range.it);
   cup_free(state->data);
   cup_free(state);
 }
@@ -418,7 +432,7 @@ int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType t
     return -2;
   }
 
-  CVariable *v = getVarScoped(state, state->nodes.value, 1);
+  CVariable *v = getVarScoped(state, state->nodes.value, SIZE_MAX);
   if (v)
   {
     cup_errorf("Cannot add symbol(%s) because it already exist", name);
@@ -440,7 +454,7 @@ CVariable *cup_get_symbol(CUPState *state, const char *name)
   idToken(state, name, len);
   if (state->nodes.value == SIZE_MAX)
     return NULL;
-  return getVarScoped(state, state->nodes.value, CVARS_MAX);
+  return getVarScoped(state, state->nodes.value, SIZE_MAX);
 }
 
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb)

@@ -366,6 +366,7 @@ void getToken(CUPState *state) {
       state->nodes.token = types1[u.i];
       return;
     }
+    ++state->input_stream;
     state->nodes.token = doubles[u.i];
     return;
   }

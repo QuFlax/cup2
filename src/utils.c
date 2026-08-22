@@ -160,18 +160,17 @@ static void vector_resize(CVector *vec, size_t needed) {
   vec->capacity = cap;
 }
 
-void vector_fpop(CVector *vec, size_t elem_size) {
-  assert(vec && elem_size > 0);
-  assert(vec->size >= elem_size);
-  if (vec->size > elem_size) {
+void vector_fpop(CVector *vec, size_t sizeT) {
+  assert(vec && sizeT > 0);
+  if (vec->size > sizeT) {
     memmove(vec->data,
-      (char *)vec->data + elem_size,
-      vec->size - elem_size);
+      (char *)vec->data + sizeT,
+      vec->size - sizeT);
+    vec->size -= sizeT;
   } else {
     cup_free(vec->data);
+    vec->size = 0;
   }
-
-  vec->size -= elem_size;
 }
 
 void vector_push(CVector *vec, const void *data, size_t sizeT) {
@@ -198,6 +197,21 @@ void vector_fpush(CVector *vec, const void *data, size_t sizeT) {
 void fpush_vector(CVector *dest, CVector src) {
   vector_fpush(dest, src.data, src.size);
   if (src.data) cup_free(src.data);
+}
+
+CVector split_vector(CVector *vec, size_t index) {
+  assert(vec);
+  if (index >= vec->size) {
+    CVector empty = {};
+    return empty;
+  }
+  CVector out = {};
+  out.size = vec->size - index;
+  out.capacity = out.size;
+  out.data = cup_malloc(out.size);
+  memcpy(out.data, (char *)vec->data + index, out.size);
+  vec->size = index;
+  return out;
 }
 
 /* ========================================================================== */
@@ -342,17 +356,6 @@ void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, siz
     cb(ctx, *slot, slot[1], (void*)(slot + 2));
   }
 }
-
-#include "libcupext.h"
-Node* getNode(struct NRange *cc) {
-  if (cc->it >= cc->end) {
-    cup_error("Incorrect Nodes");
-    exit(1);
-  }
-  return cc->it++;
-}
-
-
 
 /*
 void symmap_del(SymbolMap *m, size_t name_idx) {
