@@ -44,19 +44,61 @@ Nodes statement(CUPState *state) {
   return n;
 }
 
-CVARS* getVars(CUPState *state, size_t name) {
-  if (name == SIZE_MAX) return NULL;
-  return map_get(&state->symmap, name, sizeof(CVARS), SIZE_MAX);
+static void scope_ensure_root(CUPState *state) {
+  if (state->scopes.size == 0) {
+    size_t this_scope = SIZE_MAX;
+    vector_pushT(state->scopes.vec, this_scope);
+    state->scope = 0;
+  }
 }
 
-CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope) {
-  CVARS* vars = getVars(state, name);
-  if (!vars) return NULL;
-  for (size_t s = CVARS_MAX; s-- > 0;) {
-    if (vars->vars[s].scope != 0 && vars->vars[s].scope <= maxscope)
-      return &vars->vars[s];
+size_t scope_enter(CUPState *state) {
+  scope_ensure_root(state);
+
+  size_t parent_to_this_scope = state->scope;
+  size_t this_scope = state->scopes.size / sizeof(size_t);
+
+  vector_pushT(state->scopes.vec, parent_to_this_scope);
+  state->scope = this_scope;
+
+  return this_scope;
+}
+
+void scope_leave(CUPState *state) {
+  assert(state->scopes.data);
+  assert(state->scope < state->scopes.size / sizeof(size_t));
+
+  size_t parent = state->scopes.data[state->scope];
+  assert(parent != SIZE_MAX); /* do not leave root scope */
+
+  state->scope = parent;
+}
+
+void putVar(CUPState *state, size_t name, CVariable var) {
+  printf("%s %ld\n", getString(state, name), var.scope);
+  map_put(&state->symmap, name, &var, sizeof(var));
+}
+
+CVariable *getVar(const CMap *vars, size_t name, size_t scope) {
+  CMapItem *item = NULL;
+  while ((item = map_get(vars, name, item, sizeof(CVariable)))) {
+    CVariable *var = (CVariable *)item->data;
+    if (var->scope == scope)
+      return (CVariable *)item->data;
   }
   return NULL;
+}
+
+CVariable *getVars(CUPState *state, size_t name, size_t depth) {
+  for (;;) {
+    CVariable *item = getVar(&state->symmap, name, depth);
+    if (item)
+      return item;
+    size_t next = state->scopes.data[depth];
+    if (next == SIZE_MAX)
+      return NULL;
+    depth = next;
+  }
 }
 
 // Names
@@ -288,27 +330,24 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     vector_pushT(left.vec, n);           // T_AT
     vector_pushT(left.vec, state->nodes.node); // T_IDENTIFIER
     size_t name = state->nodes.value;
-    CVariable* vvv = getVarScoped(state, name, state->scope);
     char tname[256];
-    if (vvv) {
+    CVariable* vvv = getVars(state, name, state->scope);
+    if (vvv == NULL) {
+      putVar(state, name, (CVariable){NULL, 0, state->scope});
+    } else {
       if (vvv->type) {
         cup_type_snname(tname, sizeof(tname), vvv->type);
         printf("defType_ function args type = %s\n", tname);
         cup_error("redefined variable function");
         exit(1);
       }
-    } else {
-      CVARS vars = {(CVariable){NULL, 0, state->scope}};
-      map_put(&state->symmap, name, &vars, sizeof(CVARS), SIZE_MAX);
     }
     vector_pushT(left.vec, name);
     getToken(state);
 
-    //CVector vars = {cup_malloc(state->vars_size), state->vars_size, state->vars_size};
-    //state->vars_size = 0;
+    scope_enter(state);
 
     Node2 comma = state->nodes;
-    state->scope++;
     Nodes args_nodes = statement(state);
     size_t argc = 1;
     if (args_nodes.data && args_nodes.data->token == T_COMMA)
@@ -327,13 +366,17 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     const CUPType *type = cup_type_put(state, fn_t);
     cup_type_snname(tname, sizeof(tname), type);
     printf("defType function type = %s\n", tname);
-    getVarScoped(state, name, state->scope)->type = type;
+    vvv = getVars(state, name, state->scope);
+    assert(vvv);
+    vvv->type = type;
     
     push_vector(&left.vec, args_nodes.vec);
 
     Nodes block = statement(state);
     push_vector(&left.vec, block.vec);
-    state->scope++;
+
+    scope_leave(state);
+
     return left;
   }
   case T_BREAK: case T_CONTINUE: {
@@ -370,22 +413,16 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   case T_IDENTIFIER: {
     vector_pushT(left.vec, state->nodes.node);
     size_t name = state->nodes.value;
-    CVariable* v = getVarScoped(state, name, state->scope);
-    if (v) {
+    CVariable* v = getVars(state, name, state->scope);
+    if (v == NULL) {
+      putVar(state, name, (CVariable){NULL, 0, state->scope});
+    } else {
       // TODO: check is it conflict name and type
       //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";
       //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
-    } else {
-      //symmap_put(&state->symmap, name, NULL, 0, state->scope);
-      CVARS vars = {(CVariable){NULL, 0, state->scope}};
-      map_put(&state->symmap, name, &vars, sizeof(CVARS), SIZE_MAX);
     }
     vector_pushT(left.vec, name);
     getToken(state);
-    //if (state->nodes.token == T_OSB) {
-    //  cup_error("Subscripts not implemented");
-    //  exit(1);
-    //}
     break;
   }
   case T_STRING: {
@@ -426,7 +463,9 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     state->nodes.token = N_BLOCK;
     vector_pushT(left.vec, state->nodes);
     skipSpaces(state);
-    state->scope++;
+    
+    scope_enter(state);
+
     while (state->nodes.token != T_CCB) {
       {
         Nodes block = statement(state);
@@ -435,7 +474,9 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       }
     }
     getToken(state); // T_CCB
-    state->scope++;
+    
+    scope_leave(state);
+
     return left;
   }
   case T_OSB: { // '['

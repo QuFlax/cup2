@@ -234,33 +234,24 @@ size_t map_hash(size_t key) {
   return key * (size_t)11400714819323198485ULL;
 }
 
-static inline void map_set(size_t *slot, size_t key, size_t dist, const void *value, size_t v_size) {
-  slot[1] = dist;
-  *slot = key;
-  memcpy((void*)(slot + 2), value, v_size);
-}
-
 void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default) {
   m->count    = 0;
   m->capacity = CMAP_INIT_CAPACITY;
+  m->k_null   = k_null;
   //m->v_size   = v_size;
-  //m->k_null   = k_null;
   //m->hash     = hash_fn;
-  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
-  assert(sizeof(size_t) * 32 >= kdv_size);
+  size_t item_size = offsetof(CMapItem, data) + v_size;
+  assert(sizeof(size_t) * 8 >= item_size);
   assert(sizeof(size_t) <= v_size);
-  m->slots = cup_malloc(kdv_size * m->capacity);
-  for (size_t i = 0; i < m->capacity; i++)
-    map_set(m->slots + i * kdv_size, k_null, SIZE_MAX, v_default, v_size);
-/*
-  if (v_default)
-    for (size_t i = 0; i < m->capacity; i++) {
-      size_t *slot = m->slots + i * kdv_size;
-      map_set(slot, k_null, 0, v_default, v_size);
-    }
-  else
-    memset(m->slots, 0, kdv_size * m->capacity);
-*/
+  m->slots = cup_malloc(item_size * m->capacity);
+  for (size_t i = 0; i < m->capacity; i++) {
+    CMapItem *item = (CMapItem *)((char*)m->slots + i * item_size);
+    item->key = k_null; item->dist = SIZE_MAX;
+    if (v_default)
+      memcpy(item->data, v_default, v_size);
+    else
+      memset(item->data, 0, v_size);
+  }
 }
 void map_free(CMap *m) {
   if (m == NULL) return;
@@ -269,7 +260,7 @@ void map_free(CMap *m) {
   m->count = 0;
   m->capacity = 0;
 }
-static void cmap_grow(CMap *m, size_t v_size, size_t k_null) {
+static void cmap_grow(CMap *m, size_t v_size) {
   size_t    new_cap   = m->capacity * 2;
   size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
   void *new_slots = cup_malloc(kdv_size * new_cap);
@@ -277,7 +268,7 @@ static void cmap_grow(CMap *m, size_t v_size, size_t k_null) {
   size_t* kdv_default = NULL;
   for (size_t i = 0; !kdv_default && i < m->capacity; i++) {
     size_t *slot = m->slots + i * kdv_size;
-    if (*slot == k_null) kdv_default = slot;
+    if (*slot == m->k_null) kdv_default = slot;
   }
   for (size_t i = 0; i < new_cap; i++)
     memcpy(new_slots + i * kdv_size, kdv_default, kdv_size);
@@ -294,70 +285,76 @@ static void cmap_grow(CMap *m, size_t v_size, size_t k_null) {
 
   for (size_t i = 0; i < old_cap; i++) {
     size_t *slot = old_slots + i * kdv_size;
-    if (*slot == k_null) continue;
-    map_put(m, *slot, (void*)(slot + 2), v_size, k_null);
+    if (*slot == m->k_null) continue;
+    map_put(m, *slot, (void*)(slot + 2), v_size);
   }
   cup_free(old_slots);
 }
-void *map_get(const CMap *m, size_t key, size_t v_size, size_t k_null) {
-  if (!m->slots || m->capacity == 0) return NULL;
-  size_t i  = map_hash(key) & (m->capacity - 1);
-  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+static CMapItem *cmap_get(const CMap *m, size_t key, size_t item_size, size_t i) {
   size_t dist = 0;
-  for (;;) {
-    size_t *slot = m->slots + i * kdv_size;
-    if (*slot == k_null || slot[1] < dist) return NULL;
-    if (*slot == key) return (void*)(slot + 2);
-    dist++;
+  do {
+    CMapItem *item = (CMapItem *)((char*)m->slots + i * item_size);
+    if (item->key == m->k_null || item->dist < dist) return NULL;
+    if (item->key == key) return item;
+    ++dist;
     i = (i + 1) & (m->capacity - 1);
-  }
+  } while(1);
 }
-void *map_put(CMap *m, size_t key, void *value, size_t v_size, size_t k_null) {
+CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t v_size) {
+  if (!m->slots || m->capacity == 0) return NULL;
+  size_t item_size = offsetof(CMapItem, data) + v_size;
+  size_t i;
+  if (prev) {
+    i = ((const char *)prev - (const char *)m->slots) / item_size;
+    i = (i + 1) & (m->capacity - 1);
+  } else {
+    i = map_hash(key) & (m->capacity - 1);
+  }
+  return cmap_get(m, key, item_size, i);
+}
+CMapItem *map_put(CMap *m, size_t key, void *value, size_t v_size) {
+  assert(value);
   if (m->count * CMAP_LOAD_DEN >= m->capacity * CMAP_LOAD_NUM)
-    cmap_grow(m, v_size, k_null);
+    cmap_grow(m, v_size);
+  size_t item_size = offsetof(CMapItem, data) + v_size;
   size_t i = map_hash(key) & (m->capacity - 1);
-  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
   size_t dist = 0;
   for (;;) {
-    size_t *slot = m->slots + i * kdv_size;
-    if (*slot == k_null) {
-      map_set(slot, key, dist, value, v_size);
+    CMapItem *item = (CMapItem *)((char*)m->slots + i * item_size);
+    if (item->key == m->k_null) {
+      item->key = key; item->dist = dist; memcpy(item->data, value, v_size);
       m->count++;
-      return (void*)(slot + 2);
+      return item;
     }
-    if (*slot == key) {
-      memcpy((void*)(slot + 2),
-             value, v_size);
-      return (void*)(slot + 2);
-    }
-    if (slot[1] < dist) {
+    //if (item->key == key) {
+    //  memcpy(item->data, value, v_size);
+    //  return item;
+    //}
+    if (item->dist < dist) {
       /* Robin Hood swap */
-      uint8_t tmp[sizeof(size_t) * 32];
-      memcpy(tmp, slot, kdv_size); //SymEntry tmp = *slot;
-      map_set(slot, key, dist, value, v_size);
-      //*slot  = entry;
+      uint8_t tmp[sizeof(size_t) * 8];
+      memcpy(tmp, item, item_size);
+      item->key = key; item->dist = dist; memcpy(item->data, value, v_size);
       dist = ((size_t*)tmp)[1];
       key = *((size_t*)tmp);
-      memcpy(value, (void*)tmp + sizeof(size_t) + sizeof(size_t), v_size);
-      //entry  = tmp;
+      memcpy(value, (void*)tmp + offsetof(CMapItem, data), v_size);
     }
     dist++;
     i = (i + 1) & (m->capacity - 1);
-  }
-}
-
-
-void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, size_t k_null) {
-  if (!m || !m->slots) return;
-  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
-  for (size_t i = 0; i < m->capacity; i++) {
-    size_t *slot = m->slots + i * kdv_size;
-    if (*slot == k_null) continue;
-    cb(ctx, *slot, slot[1], (void*)(slot + 2));
   }
 }
 
 /*
+void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size) {
+  if (!m || !m->slots) return;
+  size_t kdv_size = sizeof(size_t) + sizeof(size_t) + v_size;
+  for (size_t i = 0; i < m->capacity; i++) {
+    size_t *slot = m->slots + i * kdv_size;
+    if (*slot == m->k_null) continue;
+    cb(ctx, *slot, slot[1], (void*)(slot + 2));
+  }
+}
+
 void symmap_del(SymbolMap *m, size_t name_idx) {
   if (!m->slots || m->capacity == 0) return;
   size_t idx  = sym_hash(name_idx) & (m->capacity - 1);

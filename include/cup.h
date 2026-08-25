@@ -53,21 +53,28 @@
 size_t map_hash(size_t key);
 
 typedef struct CMap {
-  void    *slots; // {key, dist, value}
-  size_t  count;    /* live entries */
-  size_t  capacity; /* slot count, always a power of two */
+  void   *slots; // {key, dist, value}
+  size_t count;    /* live entries */
+  size_t capacity; /* slot count, always a power of two */
+  size_t k_null;
 } CMap;
 
-typedef void (*map_iter_callback)(void *ctx, size_t key, size_t dist, const void *slot);
+typedef struct CMapItem {
+  size_t  key;
+  size_t  dist;
+  uint8_t data[];
+} CMapItem;
+
+typedef void (*map_iter_callback)(void *ctx, const CMapItem *item);
 
 void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default);
 void map_free(CMap *m);
-void *map_get(const CMap *m, size_t key, size_t v_size, size_t k_null);
-void *map_put(CMap *m, size_t key, void *value, size_t v_size, size_t k_null);
+CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t v_size);
+CMapItem *map_put(CMap *m, size_t key, void *value, size_t v_size);
 /* Remove an entry (used when popping scopes). */
 //void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
 /* Iterate every live entry; cb receives each CVariable* in insertion order. */
-void       map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size, size_t k_null);
+//void       map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size);
 
 /* ========================================================================== */
 /*                           TOKEN / NODE TYPES                               */
@@ -177,11 +184,17 @@ struct CUPState {
     const char *priv_stream;
 
     /* Current parser token / node */
-    union
-    {
+    union {
         Node2 nodes;
         CVariable *variable;
     };
+    union {
+        struct {
+            size_t *data;
+            size_t size;
+        };
+        CVector vec;
+    } scopes;
     size_t scope;
 
     /* String intern table.
@@ -213,7 +226,8 @@ struct CUPState {
     const char *bytecode_path;
     const char *code_path;
     CVector vector_;
-    size_t l1, l2, l3, l4, l5, l6, l7, l8;
+    
+    size_t l1, l2, l3, l4;
     // CUPCodeGen generator;
 };
 
@@ -221,8 +235,6 @@ struct CUPState {
 static_assert(sizeof(CUPState) == 256,
                "CUPState size must be 256 bytes");
 
-
-#define CVARS_MAX 4
 
 /*
 typedef struct CVariable {
@@ -233,12 +245,12 @@ typedef struct CVariable {
 } CVariable;
 */
 
-typedef struct CVARS {
-    CVariable vars[CVARS_MAX];
-} CVARS;
+//CVariable* getVar(CUPState *state, size_t name);
+CVariable *getVars(CUPState *state, size_t name, size_t maxscope);
+void putVar(CUPState *state, size_t name, CVariable var);
 
-CVARS* getVars(CUPState *state, size_t name);
-CVariable* getVarScoped(CUPState *state, size_t name, size_t maxscope);
+size_t scope_enter(CUPState *state);
+void scope_leave(CUPState *state);
 
 const char *get_exe_path(void);
 void *allocMemory(size_t size);

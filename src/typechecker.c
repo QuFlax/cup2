@@ -133,10 +133,11 @@ int defTypeU(CUPState *state, Nodes nodes, size_t* i, CValue* rvalue, const CUPT
   }
   Node n = *getNode(nodes, i);
   switch (n.token) {
-  case N_BLOCK: case T_COMMA: {
+  case N_BLOCK:
+    state->scope++;
+  case T_COMMA:
     *rvalue = defTypeCount(getNode(nodes, i)->value);
     return 0;
-  }
   case N_ARRAY: {
     CValue left = {&cup_type_void, NULL, NULL};
     size_t* id = &(getNode(nodes, i)->value);
@@ -256,7 +257,7 @@ int defTypeU(CUPState *state, Nodes nodes, size_t* i, CValue* rvalue, const CUPT
     return 0;
   }
   case N_VARIABLE: {
-    CVariable* var = getVarScoped(state, getNode(nodes, i)->value, SIZE_MAX);
+    CVariable *var = getVars(state, getNode(nodes, i)->value, state->scope);
     if (var == NULL) {
       cup_error("getVarScoped(state, getNode(nodes, i).value, SIZE_MAX)");
       return 1;
@@ -270,6 +271,7 @@ int defTypeU(CUPState *state, Nodes nodes, size_t* i, CValue* rvalue, const CUPT
     if(defTypeU(state, nodes, i, &left, NULL))
       return 1;
     CVariable* var = left.variable;
+    state->scope++;
     CValue right = {};
     if(defTypeU(state, nodes, i, &right, NULL))
       return 1;
@@ -304,22 +306,6 @@ int defTypeU(CUPState *state, Nodes nodes, size_t* i, CValue* rvalue, const CUPT
       return 0;
     *rvalue = left;
     return 0;
-    /*
-    if (body.type == NULL || body.type->realtype != CUP_TYPE_COUNT) {
-      state->nodes.vtype = saved_return;
-      cup_error("defType: invalid function body");
-      return 1;
-    }
-    if (state->nodes.vtype != NULL) {
-      // TODO: promote
-      left.type->elements[0] = state->nodes.vtype;
-    }
-    state->nodes.vtype = saved_return;
-    if (left.type->elements[0] == NULL)
-      return 0;
-    *value = left;
-    return 0;
-    */
   }
   case T_OSB: {
     CValue left = {};
@@ -525,29 +511,36 @@ static void defTypeRange(CUPState *state, NRange range,
 }
 */
 
-static void defTypeErr(CUPState *state, CVector pending, const char* err) {
+static void defTypeErr(CVector pending, const char* err) {
   size_t unresolved_count = pending.size / sizeof(*pending.data);
   cup_errorf(err, unresolved_count, unresolved_count == 1 ? "" : "s");
   cup_free(pending.data);
 }
+
+typedef struct SSC {
+  size_t index;
+  size_t scope;
+} SSC;
+
 
 int defType(CUPState *state, Nodes* nodes) {
   if (state == NULL) {
     cup_error("defType: state is NULL");
     return 1;
   }
-  size_t index = 0;
+  SSC index = {0, 0};
   CVector pending = {};
   vector_pushT(pending, index);
   size_t pass = 0;
   do {
     size_t count = 1;
-    size_t begin = *(size_t*)pending.data;
+    SSC begin = *(SSC*)pending.data;
+    state->scope = begin.scope;
     for (size_t i = 0; i < count; i++) {
       CValue value = {};
-      size_t save = begin;
-      if (defTypeU(state, *nodes, &begin, &value, NULL)) {
-        defTypeErr(state, pending,
+      SSC save = begin;
+      if (defTypeU(state, *nodes, &begin.index, &value, NULL)) {
+        defTypeErr(pending,
           "defType: could not resolve %zu expression%s "
           "(undefined symbol or cyclic type dependency)");
         return 1;
@@ -563,10 +556,9 @@ int defType(CUPState *state, Nodes* nodes) {
       }
 
     }
-    vector_fpop(&pending, sizeof(size_t));
-    //vector_fpopT(pending);
+    vector_fpop(&pending, sizeof(SSC));
     if (pass++ >= CUP_DEFTYPE_MAX_PASSES) {
-      defTypeErr(state, pending,
+      defTypeErr(pending,
         "defType: maximum inference passes reached; "
         "%zu expression%s remain unresolved");
       return 1;

@@ -96,7 +96,6 @@ CUP_GEN_RESULT get_size_wrapper(CUPState* state,  CValue* args, size_t max, CVal
   }
   return CUP_GEN_DONE;
   (void)state;
-  (void)args ;
 }
 
 size_t count_per(const char* str) {
@@ -144,13 +143,13 @@ CUP_GEN_RESULT printf_wrapper(CUPState *state, CValue* args, size_t max, CValue*
 }
 #endif
 
-void symbol_cb(void *ctx, const char *name, const size_t val, const CUPType *type) {
+void symbol_cb(void *ctx, const char *name, const CVariable var) {
   CUPState* state = (CUPState*)ctx;
   (void)state;
   char tname[256];
-  cup_type_snname(tname, sizeof(tname), type);
+  cup_type_snname(tname, sizeof(tname), var.type);
   //char* tname = cup_type_name(type);
-  printf("%s, type= %s, value= %ld\n", name, tname, val);
+  printf("%s[%ld], type= %s, value= %ld\n", name, var.scope, tname, var.value);
   //r(tname, 0);
 }
 
@@ -173,8 +172,8 @@ int main(int argc, char **argv) {
 #if CUPE
     const CUPType gent = cup_type_generator(printf_wrapper);
     const CUPType gent2 = cup_type_generator(get_size_wrapper);
-    cup_add_symbol(state, "printf", (void *)printf, gent);
-    cup_add_symbol(state, "sizeof", (void *)get_size, gent2);
+    //cup_add_symbol(state, "printf", (void *)printf, gent);
+    //cup_add_symbol(state, "sizeof", (void *)get_size, gent2);
 #endif
     //const CUPType ft3 = cup_type_function(&cup_type_int, &cup_type_int);
     cup_add_symbol(state, "print", (void *)myprint, ft);
@@ -251,17 +250,25 @@ int main(int argc, char **argv) {
 
   printf("OK\n");
 #if CUPE
-  CVariable *minus = cup_get_symbol(state, "minus");
-  if (minus && minus->value) {
+  CVariable *add = cup_get_symbol(state, "s");
+  CVariable *a = cup_get_symbol(state, "a");
+  if (a) {
+    printf("a = %ld\n", a->value);
+  }
+  if (add) {
     //typedef size_t (*Fadd)(size_t, size_t);
     //size_t r = ((Fadd)*add)(54, 10);
     //printf("add(54, 10) -> %ld\n", r);
-    typedef size_t (*Ft)(size_t*);
-    size_t r = 251;
+    typedef size_t (*Ft)(size_t);
+    //size_t r = 251;
     //r = ((Ft)minus->value)(0);
     //printf("minus(0) -> %ld\n", r);
-    printf("minus(&r) -> %ld\n", ((Ft)minus->value)(&r));
+    printf("s(2) -> %ld\n", ((Ft)add->value)(2));
   }
+  if (a) {
+    printf("a = %ld\n", a->value);
+  }
+  cup_list_symbols(state, state, symbol_cb);
 #endif
 
 #if 0

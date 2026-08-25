@@ -194,6 +194,7 @@ struct CVariable {
     //size_t name;         /**< Offset into string-intern table */
     size_t value;         /**< Variable value / symbol address */
     size_t scope;
+    //size_t parent;
 };
 
 const uint8_t *getData(CUPState *state, size_t i);
@@ -249,7 +250,7 @@ CVariable *cup_get_symbol(CUPState *state, const char *name);
 //const char* cup_var_name(CUPState* state, CVariable* var);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
-typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const size_t val, const CUPType *type);
+typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const CVariable var);
 
 /** @brief Iterate over all registered symbols. */
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);

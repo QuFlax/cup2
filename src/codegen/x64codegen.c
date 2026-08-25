@@ -381,6 +381,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
   size_t value = 0;
   switch (ntype) {
     case N_BLOCK:
+      state->scope++;
     case T_COMMA:
       return getNode(&buf->range)->value;
     case T_OSB: {
@@ -421,7 +422,11 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case N_VARIABLE: {
       value = getNode(&buf->range)->value;
       //state->nodes.value = value;
-      CVariable* var = getVarScoped(state, value, SIZE_MAX);
+      CVariable *var = getVars(state, value, state->scope);
+      if (var == NULL) {
+        assert(0);
+        exit(1);
+      }
       //CVariable* var = &(state->vars)[value];
       //state->nodes.variable = var;
       if (rvalue) *rvalue = var;
@@ -609,6 +614,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         cup_error("N_FUNCTION var type is not FUNCTION");
         exit(1);
       }
+      state->scope++;
       size_t arg_count = 0;
       while (var->type->elements[arg_count + 1] != &cup_type_void) arg_count++;
       codegen_func(state, buf, &var->value, arg_count);
