@@ -12,6 +12,4 @@ fib.c
 test.b
 test.i
 cod.c
-test.b
-test.b
-test.i
+out.o
