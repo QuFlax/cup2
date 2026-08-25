@@ -250,7 +250,7 @@ CVariable *cup_get_symbol(CUPState *state, const char *name);
 //const char* cup_var_name(CUPState* state, CVariable* var);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
-typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const CVariable var);
+typedef void (*cup_list_symbols_callback)(CUPState *state, void *ctx, const char *name, const CVariable var);
 
 /** @brief Iterate over all registered symbols. */
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);
@@ -262,7 +262,7 @@ void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);
 const char* cup_bytecode_path(CUPState* state, const char* path);
 const char* cup_code_path(CUPState* state, const char* path);
 
-void cup_write_bytecode(CUPState* state, CUPModule* m);
+//void cup_write_bytecode(CUPState* state, CUPModule* m);
 void cup_write_code(CUPState* state, CUPModule *m);
 
 /** @brief Compile source from a NUL-terminated string. */

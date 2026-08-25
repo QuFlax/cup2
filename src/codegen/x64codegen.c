@@ -98,13 +98,15 @@ static void emit_pop_reg(CUPModule *buf, X64Reg reg) {
 }
 
 // MOV reg, imm64
-static void emit_mov_reg_imm64(CUPModule *buf, X64Reg reg, uint64_t imm) {
+static size_t emit_mov_reg_imm64(CUPModule *buf, X64Reg reg, uint64_t imm) {
 #if DEBUG_LOG
     printf("OP: mov %s, 0x%016llx\n", X64Reg_names[reg], (unsigned long long)imm);
 #endif
   emit_rexw(buf, 0, reg);
   emit8(buf, 0xB8 + (reg & 7));
+  size_t off = buf->size;
   emit64(buf, imm);
+  return off;
 }
 
 // MOV reg, reg
@@ -374,25 +376,25 @@ static inline Node* getNode(NRange *cc) {
 
 size_t codegen_expr(CUPState* state, CUPModule *buf,
   X64Reg treg, X64Reg sreg,
-  CVariable **rvalue) {
+  NRange* range, CVariable **rvalue) {
   assert(buf != NULL);
-  CTType ntype = getNode(&buf->range)->token;
+  CTType ntype = getNode(range)->token;
   //cup_errorf("codegen node '%s'", token_names[ntype]);
-  size_t value = 0;
+  //size_t value = 0;
   switch (ntype) {
     case N_BLOCK:
       state->scope++;
     case T_COMMA:
-      return getNode(&buf->range)->value;
+      return getNode(range)->value;
     case T_OSB: {
       X64Reg temp_reg = R10;
-      if (codegen_expr(state, buf, treg, sreg, NULL)) {
+      if (codegen_expr(state, buf, treg, sreg, range, NULL)) {
         cup_error("N_OP 1 codegen left is multiple values");
         exit(1);
       }
       emit_push_reg(buf, temp_reg);
-      value = codegen_expr(state, buf, temp_reg, temp_reg, NULL);
-      if (value) {
+      size_t i = codegen_expr(state, buf, temp_reg, temp_reg, range, NULL);
+      if (i) {
         cup_error("N_OP 2 codegen right is multiple values");
         exit(1);
       }
@@ -404,23 +406,28 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       return 0;
     }
     case N_ARRAY: {
-      value = getNode(&buf->range)->value;
-      emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, value));
+      size_t value = getNode(range)->value;
+      size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, value));
+      CObjRef ref = {off, 1, NULL, value};
+      vector_pushT(buf->objrefs.vec, ref);
       size_t save = buf->size;
-      size_t i = codegen_expr(state, buf, treg, sreg, rvalue);
+      size_t i = codegen_expr(state, buf, treg, sreg, range, rvalue);
       buf->size = save;
       return i;
     }
     case T_NUMBER: {
-      emit_mov_reg_imm64(buf, treg, getNode(&buf->range)->value);
+      emit_mov_reg_imm64(buf, treg, getNode(range)->value);
       return 0;
     }
     case T_STRING: {
-      emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, getNode(&buf->range)->value));
+      size_t idx = getNode(range)->value;
+      size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, idx));
+      CObjRef ref = {off, 1, NULL, idx};
+      vector_pushT(buf->objrefs.vec, ref);
       return 0;
     }
     case N_VARIABLE: {
-      value = getNode(&buf->range)->value;
+      size_t value = getNode(range)->value;
       //state->nodes.value = value;
       CVariable *var = getVars(state, value, state->scope);
       if (var == NULL) {
@@ -430,14 +437,18 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       //CVariable* var = &(state->vars)[value];
       //state->nodes.variable = var;
       if (rvalue) *rvalue = var;
-      emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
+      {
+        size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
+        CObjRef ref = {off, 0, var, 0};
+        vector_pushT(buf->objrefs.vec, ref);
+      }
       if (sreg != ANY) {
         emit_mov_reg_deref(buf, treg, sreg);
       }
       return 0;
     }
     case T_ADDEQ: {
-      size_t i = codegen_expr(state, buf, RBX, ANY, NULL);
+      size_t i = codegen_expr(state, buf, RBX, ANY, range, NULL);
       if (i) {
         cup_error("N_ADDEQ lhs");
         exit(1);
@@ -445,7 +456,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit_push_reg(buf, RBX);
       emit_mov_reg_deref(buf, RAX, RBX);
       emit_push_reg(buf, RAX);
-      i = codegen_expr(state, buf, RAX, RAX, NULL);
+      i = codegen_expr(state, buf, RAX, RAX, range, NULL);
       if (i) {
         cup_error("N_ADDEQ rhs");
         exit(1);
@@ -459,7 +470,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       break;
     }
     case T_EQ: {
-      size_t i = codegen_expr(state, buf, RBX, RBX, NULL);
+      size_t i = codegen_expr(state, buf, RBX, RBX, range, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -468,7 +479,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         emit_push_reg(buf, RAX);
         emit_push_reg(buf, treg);
       }
-      i = codegen_expr(state, buf, RAX, ANY, NULL);
+      i = codegen_expr(state, buf, RAX, ANY, range, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -487,8 +498,8 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case T_LESSEQ: {
       X64Reg temp_reg = R10;
       //printf("add1 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      value = codegen_expr(state, buf, treg, sreg, NULL);
-      if (value) {
+      size_t i = codegen_expr(state, buf, treg, sreg, range, NULL);
+      if (i) {
         cup_error("N_OP 1 codegen left is multiple values");
         exit(1);
       }
@@ -502,8 +513,8 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit_push_reg(buf, temp_reg);
       //emit_push_reg(buf, treg);
       //printf("add2 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      value = codegen_expr(state, buf, temp_reg, temp_reg, NULL);
-      if (value) {
+      i = codegen_expr(state, buf, temp_reg, temp_reg, range, NULL);
+      if (i) {
         cup_error("N_OP 2 codegen right is multiple values");
         exit(1);
         //return 1;
@@ -521,8 +532,8 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
 
       // const CUPType *type = defType(state, buf->it, NULL);
       CVariable* var = NULL;
-      value = codegen_expr(state, buf, RAX, RAX, &var);
-      if (value) {
+      size_t i = codegen_expr(state, buf, RAX, RAX, range, &var);
+      if (i) {
         cup_error("N_CALL 1");
         exit(1);
       }
@@ -542,7 +553,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         exit(1);
       }
       emit_push_reg(buf, RAX);
-      size_t count = codegen_expr(state, buf, RAX, RAX, NULL);
+      size_t count = codegen_expr(state, buf, RAX, RAX, range, NULL);
 #if CCHECK
       const CUPType *type = state->nodes.node.variable->type;
       if (type->realtype != CUP_TYPE_GENERATOR) {
@@ -566,7 +577,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       printf("i = %ld\n", value);
 #endif
       for (size_t i = 0; i < count; i++) {
-        if (codegen_expr(state, buf, RAX, RAX, NULL)) {
+        if (codegen_expr(state, buf, RAX, RAX, range, NULL)) {
             cup_error("N_CALL ARG");
             exit(1);
         }
@@ -584,24 +595,9 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       return 0;
     }
     case T_AT: {
-      /*size_t i = codegen_expr(state, nodes, nullptr, RAX);
-    if (i) {
-      cup_error(state, "N_FUNCTION 1");
-      exit(i);
-    }
-    CVariable *var = state->variable;
-    codegen_func(buf, nodes, &var->value, SIZE_MAX);
-    break;*/
       size_t size = buf->size;
-#if DEBUG_LOG
-      printf("--: Save --\n");
-#endif
       CVariable* var = NULL;
-      size_t i = codegen_expr(state, buf, RAX, RAX, &var);
-#if DEBUG_LOG
-      printf("--: RESTORE --\n");
-#endif
-      buf->size = size;
+      size_t i = codegen_expr(state, buf, RAX, RAX, range, &var);
       if (i) {
         cup_error("N_FUNCTION 1");
         exit(1);
@@ -617,11 +613,14 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       state->scope++;
       size_t arg_count = 0;
       while (var->type->elements[arg_count + 1] != &cup_type_void) arg_count++;
-      codegen_func(state, buf, &var->value, arg_count);
+      if (arg_count == 0 && arg_count != codegen_expr(state, buf, RAX, ANY, range, NULL))
+          exit(17);
+      buf->size = size;
+      codegen_func(state, buf, range, &var->value, arg_count);
       return 0;
     }
     case T_IF: {
-      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, range, NULL);
       if (i) {
         cup_error("N_IF 1");
         exit(1);
@@ -632,7 +631,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit32(buf, 0);
       size_t count = 1;
       for (size_t j = 0; j < count; j++) {
-        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, NULL);
         if (i)
           count += i;
       }
@@ -649,7 +648,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     }
     case T_WHILE: {
       size_t condition_target = buf->size;
-      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, range, NULL);
       if (i) {
         cup_error("T_WHILE 1");
         exit(1);
@@ -661,7 +660,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
 
       size_t count = 1;
       for (size_t j = 0; j < count; j++) {
-        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, NULL);
         if (i)
           count += i;
       }
@@ -675,7 +674,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       return 0;
     }
     case T_RETURN: {
-      size_t i = codegen_expr(state, buf, RAX, RAX, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, range, NULL);
       if (i) {
         cup_error("N_RETURN 1");
         exit(i);
@@ -796,7 +795,7 @@ void bufmove512(CUPModule* buf, size_t start, size_t length) {
 }
 */
 
-void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_count) {
+void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count) {
   state->nodes.value = buf->size;
   size_t save = buf->size;
   CRealloc r = {value, 0};
@@ -808,18 +807,18 @@ void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_cou
   emit_xor_reg_reg(buf, RAX, RAX);
 
   if (arg_count) {
-    if (arg_count != codegen_expr(state, buf, RAX, ANY, NULL)) {
+    if (arg_count != codegen_expr(state, buf, RAX, ANY, range, NULL)) {
       exit(17);
     }
     for (size_t j = 0; j < arg_count; j++) {
-      codegen_expr(state, buf, RAX, ANY, NULL);
+      codegen_expr(state, buf, RAX, ANY, range, NULL);
       emit_mov_deref_reg(buf, sysv_arg_regs[j], RAX);
     }
   }
   size_t reljump_begin = 0;
   size_t count = 1;
   for (size_t j = 0; j < count; j++) {
-    size_t i = codegen_expr(state, buf, RETURN_REG, ANY, NULL);
+    size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, NULL);
     if (i)
       count += i;
   }

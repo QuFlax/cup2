@@ -7,7 +7,7 @@ LIB_NAME := libcup
 CUP_NAME := cup
 
 # -fsanitize=memory
-CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -fsanitize=memory
+CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -fsanitize=memory -MMD -MP
 # -lm
 LDFLAGS := 
 
@@ -18,9 +18,11 @@ SRC_FILES := \
 	$(SRC_DIR)/types.c \
 	$(SRC_DIR)/moduler.c \
 	$(SRC_DIR)/codegen/x64codegen.c \
-	$(SRC_DIR)/typechecker.c
+	$(SRC_DIR)/typechecker.c \
+	$(SRC_DIR)/objwrite.c
 
 OBJ_FILES := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRC_FILES))
+DEP_FILES := $(OBJ_FILES:.o=.d)
 
 STATIC_LIB := $(BUILD_DIR)/$(LIB_NAME).a
 SHARED_LIB := $(BUILD_DIR)/$(LIB_NAME).so
@@ -28,6 +30,8 @@ STATIC_EXE := $(BUILD_DIR)/$(CUP_NAME)
 SHARED_EXE := $(BUILD_DIR)/$(CUP_NAME).elf
 
 all: $(STATIC_LIB) $(SHARED_LIB) $(STATIC_EXE) $(SHARED_EXE)
+
+-include $(DEP_FILES)
 
 # Create build directories automatically
 $(BUILD_DIR):

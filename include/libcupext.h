@@ -91,6 +91,15 @@ typedef struct NRange {
 
 CVecT(NRange);
 
+typedef struct CObjRef {
+    size_t     offset;      /* byte offset in buf->data where the imm64 starts */
+    int        kind;        /* 0 = variable address (&var->value), 1 = literal data offset */
+    CVariable *var;         /* kind == 0 */
+    size_t     data_offset; /* kind == 1: offset into state->data */
+} CObjRef;
+
+CVecT(CObjRef);
+
 typedef struct CRealloc {
     size_t         *var;
     size_t          ptr;
@@ -104,15 +113,16 @@ struct CUPModule {
     uint8_t    *data;
     size_t     size;
     CReallocs  reallocs;
-    NRange     range;
+    //NRange     range;
+    CObjRefs   objrefs;
 };
 
-static_assert(sizeof(struct CUPModule) == (8 * sizeof(size_t)),
-              "CUPModule size must be 4 bytes");
+//static_assert(sizeof(struct CUPModule) == (8 * sizeof(size_t)),
+//              "CUPModule size must be 4 bytes");
 
 CVecT(CValue);
 
-void codegen_func(CUPState* state, CUPModule* buf, size_t *value, size_t arg_count);
+void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count);
 
 const CUPType    *cup_type_get(CUPState *state, const CUPType type);
 const CUPType    *cup_type_put(CUPState *state, const CUPType type);

@@ -400,8 +400,6 @@ void lielf_dump(lielf_binary_t *bin, FILE *out);
  *  Implementation
  * ====================================================================== */
 
-#define LIELF_IMPLEMENTATION
- 
 #ifdef LIELF_IMPLEMENTATION
 #ifndef LIELF_IMPLEMENTATION_INCLUDED
 #define LIELF_IMPLEMENTATION_INCLUDED
@@ -913,6 +911,50 @@ static void lielf__maybe_update_data(lielf_section_t *sec, uint8_t *newbuf, size
     sec->_dirty = 1;
 }
 
+/* Stable-sort symbols so all LOCAL entries precede all GLOBAL/WEAK entries
+ * (index 0 / STN_UNDEF always stays first). ELF requires this: sh_info on
+ * .symtab/.dynsym must equal the index of the first non-local symbol, and
+ * a compliant linker (bfd ld) rejects a table where a local symbol sits
+ * at or past that index. Any relocations that reference this symbol table
+ * by index are fixed up in place. Returns 0 on success, -1 on allocation
+ * failure (bin left unmodified on failure). */
+static int lielf__sort_symbols_local_first(lielf_binary_t *bin, int dynamic) {
+    lielf_symbol_t *syms = dynamic ? bin->dynsymbols : bin->symbols;
+    size_t n = dynamic ? bin->ndynsymbols : bin->nsymbols;
+    if (n <= 1) return 0;
+
+    uint32_t *order = (uint32_t *)malloc(n * sizeof(uint32_t));
+    uint32_t *remap = (uint32_t *)malloc(n * sizeof(uint32_t));
+    lielf_symbol_t *tmp = (lielf_symbol_t *)malloc(n * sizeof(lielf_symbol_t));
+    if (!order || !remap || !tmp) { free(order); free(remap); free(tmp); return -1; }
+
+    size_t pos = 0, i;
+    order[pos++] = 0; /* STN_UNDEF stays at index 0 */
+    for (i = 1; i < n; i++)
+        if (LIELF_ST_BIND(syms[i].info) == LIELF_STB_LOCAL)
+            order[pos++] = (uint32_t)i;
+    for (i = 1; i < n; i++)
+        if (LIELF_ST_BIND(syms[i].info) != LIELF_STB_LOCAL)
+            order[pos++] = (uint32_t)i;
+
+    for (i = 0; i < n; i++) {
+        tmp[i] = syms[order[i]];
+        remap[order[i]] = (uint32_t)i;
+    }
+    memcpy(syms, tmp, n * sizeof(lielf_symbol_t));
+    free(tmp);
+    free(order);
+
+    /* fix up every relocation that indexes into this symbol table */
+    for (i = 0; i < bin->nrelocs; i++) {
+        lielf_reloc_t *r = &bin->relocs[i];
+        if (r->dynamic == dynamic && r->sym < n)
+            r->sym = remap[r->sym];
+    }
+    free(remap);
+    return 0;
+}
+
 static int lielf__rebuild_strtab(lielf_binary_t *bin, int dynamic) {
     lielf_symbol_t *syms = dynamic ? bin->dynsymbols : bin->symbols;
     size_t n = dynamic ? bin->ndynsymbols : bin->nsymbols;
@@ -952,6 +994,11 @@ static int lielf__rebuild_strtab(lielf_binary_t *bin, int dynamic) {
 }
 
 static int lielf__rebuild_symtab(lielf_binary_t *bin, int dynamic) {
+    /* Symbols must be ordered LOCAL-first before we (re)compute name
+     * offsets, serialize the table, or set sh_info -- do it first, and
+     * before .rela* rebuild reads bin->relocs[].sym. */
+    if (lielf__sort_symbols_local_first(bin, dynamic) != 0) return -1;
+
     lielf_symbol_t *syms = dynamic ? bin->dynsymbols : bin->symbols;
     size_t n = dynamic ? bin->ndynsymbols : bin->nsymbols;
     const char *secname = dynamic ? ".dynsym" : ".symtab";
@@ -994,6 +1041,8 @@ static int lielf__rebuild_symtab(lielf_binary_t *bin, int dynamic) {
     sec->entsize = sizeof(lielf_raw_sym_t);
     sec->kind    = dynamic ? LIELF_SEC_DYNSYM : LIELF_SEC_SYMTAB;
 
+    /* symbols are now local-first, so this is just the length of the
+     * local run (falls back to n if every symbol happens to be local) */
     uint32_t first_global = (uint32_t)n;
     for (i = 0; i < n; i++) {
         if (LIELF_ST_BIND(syms[i].info) != LIELF_STB_LOCAL) { first_global = (uint32_t)i; break; }
@@ -1160,7 +1209,10 @@ static void lielf__resolve_links(lielf_binary_t *bin) {
 uint8_t *lielf_build(lielf_binary_t *bin, size_t *out_size) {
     if (!bin) return NULL;
 
-    /* 1. regenerate everything derived from the structured model */
+    /* 1. regenerate everything derived from the structured model.
+     * NOTE: rebuild_symtab sorts symbols LOCAL-first and remaps every
+     * bin->relocs[].sym that references the table it just sorted, so it
+     * must run (for both tables) before rebuild_relas serializes .rela*. */
     if (lielf__rebuild_strtab(bin, 0) != 0) return NULL;
     if (lielf__rebuild_symtab(bin, 0) != 0) return NULL;
     if (lielf__rebuild_strtab(bin, 1) != 0) return NULL;

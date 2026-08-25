@@ -143,14 +143,11 @@ CUP_GEN_RESULT printf_wrapper(CUPState *state, CValue* args, size_t max, CValue*
 }
 #endif
 
-void symbol_cb(void *ctx, const char *name, const CVariable var) {
-  CUPState* state = (CUPState*)ctx;
-  (void)state;
+void symbol_cb(CUPState* state, void *ctx, const char *name, const CVariable var) {
+  (void)state; (void)ctx;
   char tname[256];
   cup_type_snname(tname, sizeof(tname), var.type);
-  //char* tname = cup_type_name(type);
   printf("%s[%ld], type= %s, value= %ld\n", name, var.scope, tname, var.value);
-  //r(tname, 0);
 }
 
 int main(int argc, char **argv) {
@@ -172,7 +169,7 @@ int main(int argc, char **argv) {
 #if CUPE
     const CUPType gent = cup_type_generator(printf_wrapper);
     const CUPType gent2 = cup_type_generator(get_size_wrapper);
-    //cup_add_symbol(state, "printf", (void *)printf, gent);
+    cup_add_symbol(state, "printf", (void *)printf, gent);
     //cup_add_symbol(state, "sizeof", (void *)get_size, gent2);
 #endif
     //const CUPType ft3 = cup_type_function(&cup_type_int, &cup_type_int);
@@ -220,8 +217,6 @@ int main(int argc, char **argv) {
         cup_delete(state);
         return 1;
       }
-      if (bytecode_path)
-        cup_write_bytecode(state, m);
       if (instructions_path)
         cup_write_code(state, m);
     }
@@ -249,6 +244,9 @@ int main(int argc, char **argv) {
   }
 
   printf("OK\n");
+
+  cup_output_object(state, "out.o");
+
 #if CUPE
   CVariable *add = cup_get_symbol(state, "s");
   CVariable *a = cup_get_symbol(state, "a");
