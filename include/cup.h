@@ -14,6 +14,7 @@
 #include <string.h>
 
 #define CUPDEFPOWER 2
+#define TEMP_CAP 2048
 
 /* ========================================================================== */
 /*                           DEBUG LOGGING                                    */
@@ -47,6 +48,7 @@
  * Robin Hood invariant keeps probe distances short.
  */
 
+#define CMAP_INIT_CAPACITY 16   /* must be a power of two */
 #define CMAP_LOAD_NUM 3   /* grow when count*4 > capacity*3  (75 %) */
 #define CMAP_LOAD_DEN 4
 
@@ -56,7 +58,8 @@ typedef struct CMap {
   void   *slots; // {key, dist, value}
   size_t count;    /* live entries */
   size_t capacity; /* slot count, always a power of two */
-  size_t k_null;
+  //size_t k_null;
+  size_t v_size;
 } CMap;
 
 typedef struct CMapItem {
@@ -65,16 +68,20 @@ typedef struct CMapItem {
   uint8_t data[];
 } CMapItem;
 
+typedef struct {
+  CUPState *state;
+  void *user_ctx;
+  cup_list_symbols_callback cb;
+} SymbolIterCtx;
 typedef void (*map_iter_callback)(void *ctx, const CMapItem *item);
 
 void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default);
 void map_free(CMap *m);
-CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t v_size);
-CMapItem *map_put(CMap *m, size_t key, void *value, size_t v_size);
+CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t k_null);
+CMapItem *map_put(CMap *m, size_t key, void *value, size_t k_null);
+void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t k_null);
 /* Remove an entry (used when popping scopes). */
 //void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
-/* Iterate every live entry; cb receives each CVariable* in insertion order. */
-//void       map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t v_size);
 
 /* ========================================================================== */
 /*                           TOKEN / NODE TYPES                               */
@@ -86,29 +93,13 @@ enum CTType_ {
     COUNT
 };
 #undef DEF
-typedef uint16_t CTType;
+
+static_assert(COUNT < UINT16_MAX, "TOO MANY TOKENS");
 
 #define N_VARIABLE T_IDENTIFIER
 #define N_FUNCTION T_AT
 
 extern const char *token_names[];
-
-/** Source location for error reporting. */
-typedef struct {
-    CTType   token;
-    uint16_t col;
-    uint32_t line;
-} Loc;
-
-/** Single AST node. */
-union Node {
-    CTType token;
-    Loc    loc;
-    size_t value;
-    double dvalue;
-    CVariable  *variable;
-    const CUPType* vtype;
-};
 
 CVecT(Node);
 
@@ -147,8 +138,8 @@ typedef union CTypes {
 
 uint8_t       *idToken(CUPState *state, const char *str, size_t len);
 
-void getToken  (CUPState *state);
-void skipSpaces(CUPState *state);
+void getToken  (CUPState *state, int space);
+//void skipSpaces(CUPState *state);
 
 int defType(CUPState *state, Nodes* nodes);
 
@@ -163,16 +154,6 @@ typedef struct CUPModuleList {
 
 //typedef struct CExternal { void *handle; } CExternal;
 //CVecT(CExternal);
-
-void emit_error(CUPModule *buf, size_t nbytes);
-void emit      (CUPModule *buf, const void *value, size_t size);
-
-#define emit8(buf, v)  do { uint8_t  _v = (v); emit((buf), &_v, 1); } while (0)
-#define emit16(buf, v) do { uint16_t _v = (v); emit((buf), &_v, 2); } while (0)
-#define emit32(buf, v) do { uint32_t _v = (v); emit((buf), &_v, 4); } while (0)
-#define emit64(buf, v) do { uint64_t _v = (v); emit((buf), &_v, 8); } while (0)
-
-#define emiti32(buf, v) do { int32_t _v = (v); emit((buf), &_v, 4); } while (0)
 
 /* ========================================================================== */
 /*                           COMPILER STATE                                   */
@@ -225,9 +206,9 @@ struct CUPState {
     CUPTarget *target;
     const char *bytecode_path;
     const char *code_path;
-    CVector vector_;
+    //CVector vector_;
     
-    size_t l1, l2, l3, l4;
+    size_t l1, l2, l3, l4, l5, l6, l7;
     // CUPCodeGen generator;
 };
 

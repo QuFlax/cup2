@@ -18,19 +18,12 @@ extern "C" {
 #include <stdint.h>
 #include <limits.h>
 
-#ifndef PAGESIZE
-#define PAGESIZE 4096
-#endif
-
 /* Error codes */
-#define CUP_ERR_CTYPE               NULL
-#define CUP_ERR_MEMORY              -1
+//#define CUP_ERR_CTYPE               NULL
+//#define CUP_ERR_MEMORY              -1
 // #define CUP_ERR_ARGUMENTS           -2
 // #define CUP_ERR_FILE_NOT_FOUND      -3
 // #define CUP_ERR_FILE_NOT_RECOGNIZED -4
-
-/* Backwards-compat alias for the old typo */
-#define CUP_ERR_MOMORY CUP_ERR_MEMORY
 
 #define CUP_API
 #define CUP_EXTERN extern CUP_API
@@ -39,9 +32,11 @@ int cup_version_major();
 int cup_version_minor();
 int cup_version();
 
-typedef union Node Node;
+typedef union  Node      Node;
 typedef struct CUPState  CUPState;
 typedef struct CUPModule CUPModule;
+typedef struct CUPType   CUPType;
+typedef struct CVariable CVariable;
 
 /* ========================================================================== */
 /*                              ALLOCATOR / LOGGER                            */
@@ -56,8 +51,8 @@ CUP_Realloc_Fn *_cup_realloc(void);
 /** @brief Set a custom memory allocator (per-thread). */
 void cup_set_realloc(CUP_Realloc_Fn realloc_func);
 
-typedef enum {
-    CUP_Level_INFO = 0, /**< Informational — may be ignored */
+typedef enum CUP_LogLevel {
+    CUP_Level_INFO = 0, /**< Informational — if debug */
     CUP_Level_WARN = 1, /**< Warning */
     CUP_Level_ERRO = 2  /**< Error */
 } CUP_LogLevel;
@@ -74,29 +69,16 @@ void cup_set_error_func(CUP_Log_Fn error_func);
 /*                              TYPE SYSTEM                                   */
 /* ========================================================================== */
 
-typedef struct CUPType CUPType;
-typedef struct CVariable CVariable;
-
-typedef struct CValue {
-    const CUPType *type;
-    void *value;
-    CVariable *variable;
-} CValue;
-
-typedef struct CUP_GEN_CTX {
-    const CUPType *argtype;
-    void                 *argvalue;
-    void                 *userctx;
-} CUP_GEN_CTX;
-
 typedef enum CUP_GEN_RESULT {
     CUP_GEN_ERROR = -1,
     CUP_GEN_CONTINUE = 0,
     CUP_GEN_DONE   = 1
 } CUP_GEN_RESULT;
 
+//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state, CUPValue* args, size_t max, const CUPType** rtype);
 typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
-    CValue* args, size_t max, struct CValue* rvalue);
+    const CUPType **argtypes, void **argvalues,
+    size_t max);
 
 typedef enum CUP_TYPE {
     CUP_TYPE_VOID,
@@ -122,13 +104,12 @@ typedef enum CUP_TYPE {
 struct CUPType {
     size_t size;
     uint16_t alignment;
-    uint16_t realtype;
+    uint16_t type;
     union {
         const CUPType **elements;
         CUP_Type_Gen gen;
     };
 };
-
 
 CUP_EXTERN CUPType cup_type_void;
 CUP_EXTERN CUPType cup_type_int;
@@ -143,33 +124,30 @@ CUP_EXTERN CUPType cup_type_sint32;
 CUP_EXTERN CUPType cup_type_uint64;
 CUP_EXTERN CUPType cup_type_sint64;
 
-#define cup_type_pointer(_type) \
-    (CUPType){ \
+#define cup_type_pointer(_type) (CUPType) { \
         .size = __SIZEOF_POINTER__, \
         .alignment = (uint16_t)sizeof(void *), \
-        .realtype = CUP_TYPE_POINTER, \
+        .type = CUP_TYPE_POINTER, \
         .elements = (const CUPType *[]){ \
             (_type), \
             NULL \
         } \
     }
 
-#define cup_type_array(_type, _size) \
-    (CUPType){ \
+#define cup_type_array(_type, _size) (CUPType) { \
         .size = _size, \
         .alignment = 0, \
-        .realtype = CUP_TYPE_ARRAY, \
+        .type = CUP_TYPE_ARRAY, \
         .elements = (const CUPType *[]){ \
             (_type), \
             NULL \
         } \
     }
 
-#define cup_type_function(_type, ...) \
-    (CUPType){ \
+#define cup_type_function(_type, ...) (CUPType) { \
         .size = sizeof(void *), \
         .alignment = (uint16_t)sizeof(void *), \
-        .realtype = CUP_TYPE_FUNCTION, \
+        .type = CUP_TYPE_FUNCTION, \
         .elements = (const CUPType *[]){ \
             (_type), \
             __VA_ARGS__, \
@@ -177,11 +155,10 @@ CUP_EXTERN CUPType cup_type_sint64;
         } \
     }
 
-#define cup_type_generator(_func, ...) \
-    (CUPType){ \
+#define cup_type_generator(_func) (CUPType){ \
         .size = 0, \
         .alignment = 0, \
-        .realtype = CUP_TYPE_GENERATOR, \
+        .type = CUP_TYPE_GENERATOR, \
         .gen = (_func) \
     }
 
@@ -250,7 +227,11 @@ CVariable *cup_get_symbol(CUPState *state, const char *name);
 //const char* cup_var_name(CUPState* state, CVariable* var);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
+#ifdef CUPLISTSTATEINSL
 typedef void (*cup_list_symbols_callback)(CUPState *state, void *ctx, const char *name, const CVariable var);
+#else
+typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const CVariable var);
+#endif
 
 /** @brief Iterate over all registered symbols. */
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);

@@ -18,7 +18,7 @@ CUPType cup_type_sint64 = CUPTypeD(int64_t, CUP_TYPE_SINT64);//{, 8, CUP_TYPE_SI
 //CUPType cup_type_efunction = cup_type_function(&cup_type_void, &cup_type_void);
  
 const CUPType* cup_type_get(CUPState *state, const CUPType type) {
-  if (state == NULL) return CUP_ERR_CTYPE;
+  if (state == NULL) return NULL;
   if (memcmp(&cup_type_void, &type, sizeof(type)) == 0) return &cup_type_void;
   if (memcmp(&cup_type_int, &type, sizeof(type)) == 0) return &cup_type_int;
   if (memcmp(&cup_type_float, &type, sizeof(type)) == 0) return &cup_type_float;
@@ -31,24 +31,22 @@ const CUPType* cup_type_get(CUPState *state, const CUPType type) {
   if (memcmp(&cup_type_sint32, &type, sizeof(type)) == 0) return &cup_type_sint32;
   if (memcmp(&cup_type_uint64, &type, sizeof(type)) == 0) return &cup_type_uint64;
   if (memcmp(&cup_type_sint64, &type, sizeof(type)) == 0) return &cup_type_sint64;
-  if (type.realtype == CUP_TYPE_ARRAY)
-    return CUP_ERR_CTYPE;
+  if (type.type == CUP_TYPE_ARRAY)
+    return NULL;
   size_t count = state->types.size / sizeof(CUPType*);
   for (size_t i = 0; i < count; i++) {
     if (memcmp(state->types.data[i], &type, sizeof(type)) == 0)
       return state->types.data[i];
   }
-  return CUP_ERR_CTYPE;
+  return NULL;
 }
 const CUPType* cup_type_put(CUPState *state, const CUPType type) {
-  if (state == NULL) return CUP_ERR_CTYPE;
   const CUPType* t = cup_type_get(state, type);
-  if (t != CUP_ERR_CTYPE)
-    return t;
+  if (t) return t;
   CUPType* newt = NULL;
   size_t i = 0;
   if (type.elements) {
-    if (type.realtype == CUP_TYPE_FUNCTION) {
+    if (type.type == CUP_TYPE_FUNCTION) {
       i = 1;
       while (type.elements[i] != &cup_type_void) i++;
       /* Include return type, all parameter slots, and the void sentinel. */
@@ -66,19 +64,19 @@ const CUPType* cup_type_put(CUPState *state, const CUPType type) {
           newt->elements[j] = cup_type_put(state, *element);
         }
       }
-    } else if (type.realtype == CUP_TYPE_GENERATOR) {
+    } else if (type.type == CUP_TYPE_GENERATOR) {
       size_t temp_size = (1) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
       newt->gen = type.gen;
-    } else if (type.realtype == CUP_TYPE_ARRAY) {
+    } else if (type.type == CUP_TYPE_ARRAY) {
       size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
       newt->elements = (const CUPType **)(newt + 1);
       if (type.elements[i])
         newt->elements[i] = cup_type_put(state, *type.elements[i]);
-    } else if (type.realtype == CUP_TYPE_POINTER) {
+    } else if (type.type == CUP_TYPE_POINTER) {
       size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
@@ -93,7 +91,7 @@ const CUPType* cup_type_put(CUPState *state, const CUPType type) {
   } else {
     cup_calloc(newt, CUPType);
   }
-  newt->realtype = type.realtype;
+  newt->type = type.type;
   newt->alignment = type.alignment;
   newt->size = type.size;
   vector_pushT(state->types.vec, newt);
@@ -166,7 +164,7 @@ const CUPType* cup_type_parse(CUPState* state, const char* sig) {
     CUPType fn_t = {};
     fn_t.size = sizeof(void*);
     fn_t.alignment = (uint16_t)sizeof(void*);
-    fn_t.realtype = CUP_TYPE_FUNCTION;
+    fn_t.type = CUP_TYPE_FUNCTION;
     fn_t.elements = args;
     return cup_type_put(state, fn_t);
   } else {
@@ -195,7 +193,7 @@ size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type) {
     APPEND_LITERAL("null");
     return total;
   }
-  switch (type->realtype) {
+  switch (type->type) {
     case CUP_TYPE_VOID:    APPEND_LITERAL("void"); break;
     case CUP_TYPE_INT:     APPEND_LITERAL("int"); break;
     case CUP_TYPE_FLOAT:   APPEND_LITERAL("float"); break;

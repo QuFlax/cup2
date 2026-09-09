@@ -8,6 +8,10 @@
 #include <assert.h>
 #include <stdarg.h>
 
+#ifndef PAGESIZE
+#define PAGESIZE 4096
+#endif
+
 /* ========================================================================== */
 /*                           MEMORY HELPERS                                   */
 /* ========================================================================== */
@@ -26,12 +30,30 @@ char *cup_vsprintf(const char *format, va_list args);
 char *cup_sprintf(const char *format, ...);
 char *cup_strdup(const char *str);
 
-//void* talloc(size_t size);
-//void treset(size_t size);
+void* cup_talloc(size_t size);
+void cup_treset(size_t size);
+size_t cup_tpos();
+
 
 /* ========================================================================== */
 /*                           LOGGING HELPERS                                  */
 /* ========================================================================== */
+
+#ifndef CUP_DEBUG
+#  define cup_dbgf(f, ...) ((void)0)
+#  define cup_dbg(msg)     ((void)0)
+#else
+
+#define cup_dbgf(f, ...) \
+    do { \
+        char *_msg = cup_sprintf((f), __VA_ARGS__); \
+        cup_log(CUP_Level_INFO, _msg); \
+        cup_free(_msg); \
+    } while (0)
+#define cup_dbg(msg) cup_log(CUP_Level_INFO, (msg))
+
+#endif
+
 
 #define cup_warnf(f, ...) \
     do { \
@@ -52,6 +74,30 @@ char *cup_strdup(const char *str);
 #define cup_error(msg) cup_log(CUP_Level_ERRO, (msg))
 
 /* ========================================================================== */
+/*                           TODO NAME                                  */
+/* ========================================================================== */
+
+typedef uint16_t CTType;
+
+/** Source location for error reporting. */
+typedef struct {
+    CTType   token;
+    uint16_t col;
+    uint32_t line;
+} Loc;
+
+/** Single AST node. */
+union Node {
+    CTType token;
+    Loc    loc;
+    size_t value;
+    double dvalue;
+    CVariable  *variable;
+    const CUPType* vtype;
+};
+
+
+/* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
 /* ========================================================================== */
 
@@ -62,27 +108,28 @@ typedef struct CVector {
     size_t capacity;
 } CVector;
 
+void vector_pop(CVector *vec, size_t sizeT);
 void vector_fpop(CVector *vec, size_t sizeT);
 void vector_push (CVector *vec, const void *data, size_t sizeT);
 void vector_fpush(CVector *vec, const void *data, size_t sizeT);
 void push_vector (CVector *dest, CVector src);   /* consumes src */
 void fpush_vector(CVector *dest, CVector src);   /* consumes src */
-CVector split_vector(CVector *vec, size_t index);
+void split_vector(CVector *dest, CVector* src, size_t size);
 
 #define vector_pushT(vec, val)  vector_push (&(vec), &(val), sizeof(val))
 #define vector_fpushT(vec, val) vector_fpush(&(vec), &(val), sizeof(val))
-#define vector_fpopT(vector)    vector_fpop (&(vector.vec),  sizeof(*vector.data))
+//#define vector_popT(vector)     vector_pop  (&(vector.vec),  sizeof(*vector.data))
+//#define vector_fpopT(vector)    vector_fpop (&(vector.vec),  sizeof(*vector.data))
 
 #ifndef CVecT
 #define CVecT(T) \
 typedef union T##s { \
-    struct { T *data; size_t size; size_t capacity; }; \
+    struct { T *data; size_t size; }; \
     CVector vec; \
 } T##s
 #endif
 
-/* ========================================================================== */
-/* ========================================================================== */
+//CVecT(CUPValue);
 
 typedef struct NRange {
     Node *it;
@@ -90,6 +137,9 @@ typedef struct NRange {
 } NRange;
 
 CVecT(NRange);
+
+/* ========================================================================== */
+/* ========================================================================== */
 
 typedef struct CObjRef {
     size_t     offset;      /* byte offset in buf->data where the imm64 starts */
@@ -108,7 +158,9 @@ typedef struct CRealloc {
 CVecT(CRealloc);
 
 struct CUPModule {
-    //CUPState *state;
+#if 0
+    CUPState *state;
+#endif
     const char *path;
     uint8_t    *data;
     size_t     size;
@@ -117,10 +169,18 @@ struct CUPModule {
     CObjRefs   objrefs;
 };
 
-//static_assert(sizeof(struct CUPModule) == (8 * sizeof(size_t)),
-//              "CUPModule size must be 4 bytes");
+static_assert(sizeof(struct CUPModule) == (9 * sizeof(size_t)),
+              "CUPModule size must be 4 bytes");
 
-CVecT(CValue);
+void emit_error(CUPModule *buf, size_t nbytes);
+void emit      (CUPModule *buf, const void *value, size_t size);
+
+#define emit8(buf, v)  do { uint8_t  _v = (v); emit((buf), &_v, 1); } while (0)
+#define emit16(buf, v) do { uint16_t _v = (v); emit((buf), &_v, 2); } while (0)
+#define emit32(buf, v) do { uint32_t _v = (v); emit((buf), &_v, 4); } while (0)
+#define emit64(buf, v) do { uint64_t _v = (v); emit((buf), &_v, 8); } while (0)
+
+#define emiti32(buf, v) do { int32_t _v = (v); emit((buf), &_v, 4); } while (0)
 
 void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count);
 

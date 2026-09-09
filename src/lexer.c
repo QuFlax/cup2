@@ -37,16 +37,18 @@ static int strindex(const char *str, const char c) {
 /* ========================================================================== */
 
 const uint8_t *getData(CUPState *state, size_t i) {
+  if (!state || i >= state->data_size)
+    return NULL;
   return state->data + i;
 }
 
 const uint8_t* getdata(CUPState* state, const char* str, size_t len) {
-  if (state->data_size < len) return 0;
+  if (state->data_size < len) return NULL;
   for (uint8_t* i = state->data + state->data_size - len; i >= state->data; i--) {
     if (memcmp(i, str, len) == 0)
       return i;
   }
-  return 0;
+  return NULL;
 }
 
 /**
@@ -274,13 +276,7 @@ size_t numberChar(CUPState* state) {
       T_CALL,   T_CRB,    T_OCB,    T_CCB, T_OSB, T_CSB,  T_DOT,   T_COMMA,
       T_COLON, T_SCOLON, T_IMPORT, T_ASK, T_AT,  T_THIS, T_CATNL, T_EXTERNAL};
 
-/**
- * @brief Get next token from input stream
- * @param state Compiler state
- */
-void getToken(CUPState *state) {
-  /* Operator tables for quick lookup */
-
+void getToken(CUPState *state, int space) {
   state->nodes.value = 0;
 
   if (state->priv_stream == NULL)
@@ -293,10 +289,16 @@ void getToken(CUPState *state) {
     int i;
     const char* temp;
   } u;
-  
-  for (u.temp = state->input_stream;
-    *state->input_stream == ' ' || *state->input_stream == '\t';
-    state->input_stream++); 
+
+  if (space)
+    for (u.temp = state->input_stream;
+      *state->input_stream == ' ' || *state->input_stream == '\t';
+      state->input_stream++);
+  else
+    for (u.temp = state->input_stream;
+      *state->input_stream == ' ' || *state->input_stream == '\t' ||
+      *state->input_stream == '\n' || *state->input_stream == '\r';
+      state->input_stream++);
   state->nodes.node.loc.col += (state->input_stream - u.temp);
   state->priv_stream = state->input_stream;
   char input_char = *state->input_stream;
@@ -384,15 +386,4 @@ void getToken(CUPState *state) {
 
   /* It's an identifier - intern it */
   idToken(state, u.temp, len);
-}
-
-/**
- * @brief Skip whitespace and get next token
- * @param state Compiler state
- */
-void skipSpaces(CUPState *state) {
-  while (*state->input_stream == ' ' || *state->input_stream == '\t' ||
-         *state->input_stream == '\n' || *state->input_stream == '\r')
-    nextChar(&state->input_stream, &state->nodes.node.loc);
-  getToken(state);
 }

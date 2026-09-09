@@ -1209,17 +1209,26 @@ static void lielf__resolve_links(lielf_binary_t *bin) {
 uint8_t *lielf_build(lielf_binary_t *bin, size_t *out_size) {
     if (!bin) return NULL;
 
-    /* 1. regenerate everything derived from the structured model.
-     * NOTE: rebuild_symtab sorts symbols LOCAL-first and remaps every
-     * bin->relocs[].sym that references the table it just sorted, so it
-     * must run (for both tables) before rebuild_relas serializes .rela*. */
-    if (lielf__rebuild_strtab(bin, 0) != 0) return NULL;
+    /*
+     * rebuild_symtab() can reorder symbols LOCAL-first.
+     *
+     * Therefore build .symtab FIRST, so the final symbol order is known,
+     * and only then generate .strtab from that final order.
+     *
+     * This also has to happen before rebuild_relas(), because
+     * rebuild_symtab() remaps relocation symbol indices.
+     */
+
     if (lielf__rebuild_symtab(bin, 0) != 0) return NULL;
-    if (lielf__rebuild_strtab(bin, 1) != 0) return NULL;
+    if (lielf__rebuild_strtab(bin, 0) != 0) return NULL;
+
     if (lielf__rebuild_symtab(bin, 1) != 0) return NULL;
+    if (lielf__rebuild_strtab(bin, 1) != 0) return NULL;
+
     if (lielf__rebuild_relas(bin) != 0) return NULL;
     if (lielf__rebuild_dynamic(bin) != 0) return NULL;
     if (lielf__rebuild_shstrtab(bin) != 0) return NULL;
+    
     lielf__resolve_links(bin);
 
     int is_rel = (bin->ehdr.e_type == LIELF_ET_REL);

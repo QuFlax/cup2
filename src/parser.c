@@ -9,10 +9,6 @@
 
 #define DEBUG_LOG 0
 
-#ifndef CUPMAXTYPES
-#define CUPMAXTYPES 256
-#endif
-
 #define pushNode(nodes, node) \
   assert(node);\
   vector_fpushT(nodes.vec, node)
@@ -40,7 +36,7 @@ Nodes primary(CUPState *state, uint8_t mpower);
 Nodes statement(CUPState *state) {
   Nodes n = primary(state, CUPDEFPOWER);
   if (state->nodes.token == T_NL)
-    skipSpaces(state);
+    getToken(state, 0);
   return n;
 }
 
@@ -76,12 +72,12 @@ void scope_leave(CUPState *state) {
 
 void putVar(CUPState *state, size_t name, CVariable var) {
   printf("%s %ld\n", getString(state, name), var.scope);
-  map_put(&state->symmap, name, &var, sizeof(var));
+  map_put(&state->symmap, name, &var, SIZE_MAX);
 }
 
-CVariable *getVar(const CMap *vars, size_t name, size_t scope) {
+CVariable *getVar(const CMap *vars, size_t name, size_t scope ) {
   CMapItem *item = NULL;
-  while ((item = map_get(vars, name, item, sizeof(CVariable)))) {
+  while ((item = map_get(vars, name, item, SIZE_MAX))) {
     CVariable *var = (CVariable *)item->data;
     if (var->scope == scope)
       return (CVariable *)item->data;
@@ -114,7 +110,7 @@ const char *token_names[] = {
       cup_errorf("Expected " #ntype ", but got %s", token_names[state->nodes.token]); \
       exit(1);                                                                 \
     }                                                                          \
-    getToken(state);                                                           \
+    getToken(state, 1);                                                           \
   } while (0)
 
 /*
@@ -187,10 +183,6 @@ CUP_TYPE commonType(CUPType left, CUPType right) {
   return CUP_TYPECOUNT;
 }
 */
-
-//const CUPType *DTypes[UINT8_MAX];
-//const CUPType **DTTypes[UINT8_MAX];
-//static size_t DRType = 0;
 
 #if FRACLIBM
 #include <math.h> // for pow, floor, log10
@@ -284,42 +276,42 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   Nodes left = {};
   switch (state->nodes.token) {
   case T_IMPORT: {
-    getToken(state);
+    getToken(state, 1);
     if (state->nodes.token != T_STRING) {
       cup_errorf("Expected Module name[string] but got '%s'", token_names[state->nodes.token]);
       return left;
     }
     importModule(state);
-    getToken(state);
+    getToken(state, 1);
     return left;
   }
   case T_EXTERNAL: {
-    getToken(state);
+    getToken(state, 1);
     if (state->nodes.token != T_STRING) {
       cup_errorf("Expected .DLL/.SO name[string] but got '%s'", token_names[state->nodes.token]);
       return left;
     }
     externalModule(state);
-    getToken(state);
+    getToken(state, 1);
     while (state->nodes.token == T_IDENTIFIER) {
       size_t name_idx = state->nodes.value;
-      getToken(state);
+      getToken(state, 1);
       if (state->nodes.token != T_STRING) {
         cup_errorf("external: expected signature string after name, got '%s'", token_names[state->nodes.token]);
         return left;
       }
       size_t sig_idx = state->nodes.value;
       externalSymbol(state, name_idx, sig_idx);
-      getToken(state);
+      getToken(state, 1);
     }
     return left;
   }
   case T_AT: { // function
     Node n = state->nodes.node;
-    getToken(state);
+    getToken(state, 1);
 
     if (state->nodes.token == T_AT) {
-      getToken(state);
+      getToken(state, 1);
       cup_error("function macro for 'T_AT' not implemented yet");
       return left;
     }
@@ -343,7 +335,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       }
     }
     vector_pushT(left.vec, name);
-    getToken(state);
+    getToken(state, 1);
 
     scope_enter(state);
 
@@ -358,12 +350,13 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       vector_pushT(left.vec, comma);
     }
     
-    const CUPType* DTypes[UINT8_MAX] = {};
+    const CUPType** types = (const CUPType**)cup_talloc(sizeof(const CUPType*) * UINT8_MAX);
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
-    DTypes[argc + 1] = &cup_type_void;
-    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, { DTypes } };
+    types[argc + 1] = &cup_type_void;
+    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, {types} };
     const CUPType *type = cup_type_put(state, fn_t);
+    cup_treset(0);
     cup_type_snname(tname, sizeof(tname), type);
     printf("defType function type = %s\n", tname);
     vvv = getVars(state, name, state->scope);
@@ -381,32 +374,32 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   }
   case T_BREAK: case T_CONTINUE: {
     vector_pushT(left.vec, state->nodes.node);
-    getToken(state);
+    getToken(state, 1);
     break;
   }
   case T_WHILE: {
     vector_pushT(left.vec, state->nodes.node);
-    skipSpaces(state);
+    getToken(state, 0);
     push_vector(&left.vec, statement(state).vec);
     push_vector(&left.vec, statement(state).vec);
     return left;
   }
   case T_RETURN: {
     vector_pushT(left.vec, state->nodes.node);
-    skipSpaces(state);
+    getToken(state, 0);
     push_vector(&left.vec, statement(state).vec);
     break;
   }
   case T_SUB: {
     state->nodes.token = N_UNARY;
     vector_pushT(left.vec, state->nodes.node);
-    getToken(state);
+    getToken(state, 1);
     push_vector(&left.vec, primary(state, CUPDEFPOWER).vec);
     break;
   }
   case T_NOT: {
     vector_pushT(left.vec, state->nodes.node);
-    getToken(state);
+    getToken(state, 1);
     push_vector(&left.vec, primary(state, CUPDEFPOWER).vec);
     break;
   }
@@ -422,31 +415,31 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
     }
     vector_pushT(left.vec, name);
-    getToken(state);
+    getToken(state, 1);
     break;
   }
   case T_STRING: {
     vector_pushT(left.vec, state->nodes);
-    getToken(state);
+    getToken(state, 1);
     break;
   }
   case T_NUMBER: {
     Node2 n = state->nodes;
-    getToken(state);
+    getToken(state, 1);
     if (state->nodes.token == T_DOT) {
       n.token = T_DOUBLE;
       n.dvalue = (double)n.value;
-      getToken(state);
+      getToken(state, 1);
       if (state->nodes.token == T_NUMBER) {
         n.dvalue += frac(state->nodes.value);
-        getToken(state);
+        getToken(state, 1);
       }
     }
     vector_pushT(left.vec, n);
     break;
   }
   case T_CALL: { // '('
-    skipSpaces(state);
+    getToken(state, 0);
     if (state->nodes.token != T_CRB) {
       left = statement(state);
       expectAndNext(T_CRB);
@@ -455,14 +448,14 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       Node2 n = state->nodes;
       n.token = T_COMMA;
       vector_pushT(left.vec, n);
-      getToken(state); // T_CRB;
+      getToken(state, 1); // T_CRB;
     }
     break;
   }
   case T_OCB: { // '{'
     state->nodes.token = N_BLOCK;
     vector_pushT(left.vec, state->nodes);
-    skipSpaces(state);
+    getToken(state, 0);
     
     scope_enter(state);
 
@@ -473,7 +466,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
         push_vector(&left.vec, block.vec);
       }
     }
-    getToken(state); // T_CCB
+    getToken(state, 1); // T_CCB
     
     scope_leave(state);
 
@@ -482,7 +475,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   case T_OSB: { // '['
     state->nodes.token = N_ARRAY;
     vector_pushT(left.vec, state->nodes);
-    skipSpaces(state);
+    getToken(state, 0);
     if (state->nodes.token != T_CSB) {
       Nodes body = primary(state, CUPDEFPOWER);
       if (body.data) {
@@ -514,19 +507,19 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   }
   case T_IF: {
     vector_pushT(left.vec, state->nodes.node);
-    skipSpaces(state);
+    getToken(state, 0);
     push_vector(&left.vec, statement(state).vec);
     push_vector(&left.vec, statement(state).vec);
     if (state->nodes.token == T_ELSE) {
       vector_fpushT(left.vec, state->nodes.node);
-      skipSpaces(state);
+      getToken(state, 0);
       push_vector(&left.vec, statement(state).vec);
     }
     break;
   }
   case T_VARG: {
     vector_pushT(left.vec, state->nodes.node);
-    getToken(state);
+    getToken(state, 1);
     break;
   }
   default: {
@@ -551,7 +544,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     }
     if (power < mpower)
       return left;
-    skipSpaces(state);
+    getToken(state, 0);
     Nodes right = {};
     int norb = opnode.token == T_CALL || opnode.token == T_OSB;
     if ((opnode.token == T_CALL && state->nodes.token == T_CRB)
@@ -570,7 +563,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
         cup_errorf("Expected T_CRB, but got %s", token_names[state->nodes.token]);
         exit(1);
       }
-      getToken(state);
+      getToken(state, 1);
       //expectAndNext(T_CRB);
       opnode.token = T_CALL;
       vector_fpushT(left.vec, opnode.node);
@@ -606,7 +599,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
         cup_errorf("Expected T_CSB, but got %s", token_names[state->nodes.token]);
         exit(1);
       }
-      getToken(state);
+      getToken(state, 1);
       //expectAndNext(T_CSB);
       vector_fpushT(left.vec, opnode.node);
       break;

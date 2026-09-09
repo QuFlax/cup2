@@ -144,8 +144,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
   putVar(state, name_idx, (CVariable){type, (size_t)fn, 0});
 }
 
-void printInstructions(FILE *out, CUPModule *m)
-{
+void printInstructions(FILE *out, CUPModule *m) {
   // fprintf(out, "-- module: %zu bytes --\n", m->size);
   for (size_t i = 0; i < m->size; i++)
   {
@@ -158,8 +157,7 @@ void printInstructions(FILE *out, CUPModule *m)
   // fprintf(out, "-- end --\n");
 }
 
-static void symbol_cb(CUPState *state, void *ctx, const char *name, const CVariable var) {
-  (void)state;
+static void symbol_cb(void *ctx, const char *name, const CVariable var) {
   char tname[256];
   cup_type_snname(tname, sizeof(tname), var.type);
   fprintf((FILE*)ctx, "%s[%ld], type= %s, value= %ld\n", name, var.scope, tname, var.value);
@@ -175,25 +173,38 @@ static void cup_write_bytecode(CUPState *state, const NRange range) {
     cup_errorf("Could not open bytecode output '%s'", filename);
     return;
   }
+  fputs("//vars\n", f);
   cup_list_symbols(state, f, symbol_cb);
+  fputs("//data\n", f);
   
   for (size_t i = 0; i < state->data_size; i++)
     fputc(*getData(state, i), f);
     //fprintf(f, "%hhx", *getData(state, i));
-  fputc('\n', f);
+  fputs("\n//ast\n", f);
   //printNodes(f, range, state);
   for (Node *it = range.it; it != range.end; it++) {
     const char* name = token_names[it->token];
-    if (it->token == N_BLOCK || it->token == T_NUMBER || it->token == T_COMMA)
-      fprintf(f, "%s - %ld\n", name, (++it)->value);
-    else if (it->token == T_IDENTIFIER)
-      fprintf(f, "%s - %s\n", name, getString(state, (++it)->value));
-    else if (it->token == T_EQ || it->token == T_CALL)
-      fprintf(f, "%s\n", name);
-    else if (it->token == T_STRING || it->token == T_MSTRING)
-      fprintf(f, "%s - \"%s\"\n", name, getData(state, (++it)->value));
+    if (it->token == N_BLOCK || it->token == T_NUMBER || it->token == T_COMMA) {
+      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
+      fprintf(f, " - %ld\n", (++it)->value);
+    }
+    else if (it->token == T_IDENTIFIER) {
+      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
+      fprintf(f, " - %s\n", getString(state, (++it)->value));
+    }
+    else if (it->token == T_EQ || it->token == T_CALL || it->token == T_OSB)
+      fprintf(f, "%s[%hu:%hu]\n", name, it->loc.col, it->loc.line);
+    else if (it->token == N_ARRAY) {
+      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
+      fprintf(f, " - data offset: %ld\n", (++it)->value);
+    }
+    else if (it->token == T_STRING || it->token == T_MSTRING) {
+      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
+      fprintf(f, " - data offset: %ld\n", (++it)->value);
+      //fprintf(f, " - \"%s\"\n", getData(state, (++it)->value));
+    }
     else
-      fprintf(f, "%s (%ld)\n", name, it->value);
+      fprintf(f, "%s[%hu:%hu] as value = %ld\n", name, it->loc.col, it->loc.line, it->value);
   }
   fclose(f);
   state->bytecode_path = NULL;
@@ -202,7 +213,7 @@ static void cup_write_bytecode(CUPState *state, const NRange range) {
 void codegen(CUPState *state, CUPModule *m, NRange range) {
   size_t init = 0;
   //const NRange range = state->range;
-  state->vector_ = (CVector){};
+  //state->vector_ = (CVector){};
   state->scope = 0;
   codegen_func(state, m, &range, &init, 0);
   //m->range = range;
@@ -268,7 +279,7 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
   Nodes nodes = {};
   vector_pushT(nodes.vec, state->nodes);
 
-  skipSpaces(state);
+  getToken(state, 0);
   while (state->nodes.token != T_EOF) {
     Nodes n = statement(state);
     if (n.data)
@@ -328,7 +339,7 @@ CUPState *cup_new(int target) {
   cup_calloc(names, DCHART);
   state->names = (uint8_t *)(names + 1);
   CVariable def = {NULL, 0, 0};
-  map_init(&state->symmap, SIZE_MAX, sizeof(CVariable), &def);
+  map_init(&state->symmap, SIZE_MAX, sizeof(def), &def);
   scope_enter(state);
   return state;
 }
@@ -435,15 +446,24 @@ CVariable *cup_get_symbol(CUPState *state, const char *name) {
     return NULL;
   return getVars(state, state->nodes.value, 1);
 }
+#ifdef CUPLISTSTATEINSL
+static void map_iter_symbols(void *ctx, const CMapItem *item) {
+  SymbolIterCtx *ctxd = ctx;
+  ctxd->cb(ctxd->state, ctxd->user_ctx,
+    getString(ctxd->state, item->key),
+    *(const CVariable *)item->data);
+}
+#else
+static void map_iter_symbols(void *ctx, const CMapItem *item) {
+  SymbolIterCtx *ctxd = ctx;
+  ctxd->cb(ctxd->user_ctx,
+    getString(ctxd->state, item->key),
+    *(const CVariable *)item->data);
+}
+#endif
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {
   if (state == NULL)
     return;
-  if (!state->symmap.slots)
-    return;
-  size_t item_size = offsetof(CMapItem, data) + sizeof(CVariable);
-  for (size_t i = 0; i < state->symmap.capacity; i++) {
-    CMapItem *item = (CMapItem *)((char*)state->symmap.slots + i * item_size);
-    if (item->key == SIZE_MAX) continue;
-    cb(state, ctx, getString(state, item->key), *(const CVariable *)item->data);
-  }
+  SymbolIterCtx ctxd = {state, ctx, cb};
+  map_iter(&state->symmap, &ctxd, map_iter_symbols, SIZE_MAX);
 }

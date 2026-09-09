@@ -6,8 +6,8 @@ SRC_DIR := src
 LIB_NAME := libcup
 CUP_NAME := cup
 
-# -fsanitize=memory
-CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -fsanitize=memory -MMD -MP
+# -fsanitize=memory -MMD -MP
+CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -fsanitize=memory
 # -lm
 LDFLAGS := 
 
