@@ -68,7 +68,7 @@ const CUPType* cup_type_put(CUPState *state, const CUPType type) {
       size_t temp_size = (1) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
-      newt->gen = type.gen;
+      ((CUPTypeExt*)newt)->gen = ((CUPTypeExt)type).gen;
     } else if (type.type == CUP_TYPE_ARRAY) {
       size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
@@ -98,6 +98,10 @@ const CUPType* cup_type_put(CUPState *state, const CUPType type) {
   // assert(type.alignment != 0);
   // assert(type.size != 0);
   return newt;
+}
+
+const CUPType *cup_type_puts(CUPGenContext *ctx, const CUPType type) {
+  return cup_type_put(ctx->state, type);
 }
 
 const CUPType* parse_one_type(CUPState* state, const char **p) {

@@ -96,6 +96,57 @@ union Node {
     const CUPType* vtype;
 };
 
+typedef enum CUP_GEN_RESULT {
+    CUP_GEN_ERROR = -1,
+    CUP_GEN_CONTINUE = 0,
+    CUP_GEN_DONE   = 1
+} CUP_GEN_RESULT;
+
+/**
+ * Generator callback.
+ *
+ * A generator can either return a normal compile-time value with
+ * cup_gen_set_value(), or construct a replacement AST expression with
+ * cup_gen_add_node()/cup_gen_set_node(). The generated root must be node 0;
+ * nodes must be emitted in the same prefix/preorder layout as the parser AST.
+ */
+typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPGenContext *ctx,
+    const CUPType **argtypes, size_t **argvalues, size_t max);
+
+void cup_gen_value(CUPGenContext *ctx, const CUPType *type, void *value);
+void cup_gen_call(CUPGenContext *ctx, const CUPType *rtype, void *value);
+//void* cup_gen_get_value(CUPGenContext *ctx);
+//CUP_EXTERN size_t cup_gen_add_node(CUPGenContext *ctx, Node node);
+//CUP_EXTERN void cup_gen_set_node(CUPGenContext *ctx, size_t root);
+//CUP_EXTERN void cup_gen_set_value(CUPGenContext *ctx, const CUPType *type, void *value);
+
+//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state, CUPValue* args, size_t max, const CUPType** rtype);
+//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
+//    const CUPType **argtypes, void **argvalues,
+//    size_t max);
+
+
+union CUPTypeExt {
+    CUPType cuptype;
+    struct {
+        size_t size;
+        uint16_t type;
+        uint16_t alignment;
+        CUP_Type_Gen gen;
+    };
+};
+
+static_assert(sizeof(CUPType) == sizeof(CUPTypeExt), "sizeof(CUPType) == sizeof(CUPTypeExt)");
+
+#define cup_type_generator(_func) (CUPTypeExt){ \
+        .size = 0, \
+        .alignment = 0, \
+        .type = CUP_TYPE_GENERATOR, \
+        .gen = (_func) \
+    }
+
+
+const CUPType *cup_type_puts(CUPGenContext *ctx, const CUPType type);
 
 /* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
@@ -183,10 +234,6 @@ void emit      (CUPModule *buf, const void *value, size_t size);
 #define emiti32(buf, v) do { int32_t _v = (v); emit((buf), &_v, 4); } while (0)
 
 void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count);
-
-const CUPType    *cup_type_get(CUPState *state, const CUPType type);
-const CUPType    *cup_type_put(CUPState *state, const CUPType type);
-const CUPType    *cup_type_parse(CUPState* state, const char* sig);
 
 void externalSymbol(CUPState* state, size_t name_idx, size_t sig_idx);
 

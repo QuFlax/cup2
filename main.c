@@ -72,42 +72,29 @@ size_t size8() {
   return 8;
 }
 #if CUPE
-CUP_GEN_RESULT get_size_wrapper(CUPState* state, const CUPType **argtypes, void **argvalues, size_t max) {
-  (void)state;
-  (void)argvalues;
-  // char tname[256];
-  // cup_type_snname(tname, sizeof(tname), var->type);
-
-  // if (args.value)
-  //   printf("State: %p %s %ld\nV = %ld, %ld %ld\n", state, tname, var->value, *args.value, i, max);
-  // else
-  //   printf("State: %p %s %ld\nV = NULL, %ld %ld\n", state, tname, var->value, i, max);
+CUP_GEN_RESULT get_size_wrapper(CUPGenContext *ctx, const CUPType **types, size_t **values, size_t max) {
+  (void)values;
   printf("max = %ld -------\n", max);
   if (max != 1) {
     cup_error("get_size_wrapper: argc is incorrect");
     return CUP_GEN_ERROR;
   }
-  argtypes[max] = &cup_type_int;
-  if (argtypes[0] == NULL)
-    return CUP_GEN_CONTINUE;
+  if (types[0] == NULL) {
+    cup_error("get_size_wrapper: types[0] is NULL");
+    return CUP_GEN_ERROR;
+  }
   char tname[256];
-  cup_type_snname(tname, sizeof(tname), argtypes[0]);
+  cup_type_snname(tname, sizeof(tname), types[0]);
   printf("type = %s\n", tname);
-  if (argtypes[0]->type == CUP_TYPE_INT) {
-    argvalues[max] = size8;
+  if (types[0]->type == CUP_TYPE_INT) {
+    cup_gen_value(ctx, &cup_type_int, (void*)sizeof(size_t));
+  } else {
+    assert(0);
   }
   return CUP_GEN_DONE;
 }
 
-size_t count_per(const char* str) {
-  size_t count = 0;
-  while (*str) {
-    if (*str++ == '%') count++;
-  }
-  return count;
-}
-
-CUP_GEN_RESULT printf_wrapper(CUPState *state, const CUPType **argtypes, void **argvalues, size_t max) {
+CUP_GEN_RESULT printf_wrapper(CUPGenContext *ctx, const CUPType **argtypes, size_t **argvalues, size_t max) {
   const char* format = NULL;
   if (max > 0) {
     if (argvalues[0] == NULL) {
@@ -116,39 +103,39 @@ CUP_GEN_RESULT printf_wrapper(CUPState *state, const CUPType **argtypes, void **
     }
     if (argtypes[0]->type != CUP_TYPE_ARRAY || argtypes[0]->elements[0]->type != CUP_TYPE_UINT8) {
       char tname[256];
-      cup_type_snname(tname, sizeof(tname), argtypes[1]);
+      cup_type_snname(tname, sizeof(tname), argtypes[0]);
       cup_errorf("args.type( %s ) is not uint8[]", tname);
       return CUP_GEN_ERROR;
     }
-    size_t str_id = *(size_t *)argvalues[0];
-    format = (char *)getData(state, str_id);
+    format = (char*)argvalues[0];
 #define FORMAT_CELL 1
-    size_t c = count_per(format) + FORMAT_CELL;
+    size_t count = FORMAT_CELL;
+    for (const char* str = format; *str; str++) {
+      if (*str == '%') count++;
+    }
 #undef FORMAT_CELL
-    if (c != max) {
-      cup_errorf("argc(%ld) != argc(%ld) format(\"%s\")", max, c, format);
+    if (count != max) {
+      cup_errorf("argc(%ld) != argc(%ld) format(\"%s\")", max, count, format);
       return CUP_GEN_ERROR;
     }
   }
-  //assert(UINT8_MAX > max);
-  //const CUPType* DTypes[UINT8_MAX] = {};
-  //for (size_t i = 1; i <= max; i++) {
-  //  DTypes[i] = argtypes[i];
-  //}
-  //DTypes[max + 1] = &cup_type_void;
-  //DTypes[0] = &cup_type_void;
-  //CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, { DTypes } };
-  //argtypes[0] = cup_type_put(state, fn_t);
-  argtypes[max] = &cup_type_void;
+  assert(UINT8_MAX > (max + 1));
+  const CUPType* DTypes[UINT8_MAX] = {};
+  DTypes[0] = &cup_type_void;
+  memcpy((char*)DTypes + sizeof(void*), argtypes, max * sizeof(void*));
+  DTypes[max + 1] = &cup_type_void;
+  CUPType fn_t = (CUPType){ sizeof(void *), CUP_TYPE_FUNCTION, (uint16_t)sizeof(void *), DTypes };
+  //cup_gen_call(ctx, cup_type_puts(ctx, fn_t), cup_gen_get_value(ctx));
+  cup_gen_call(ctx, cup_type_puts(ctx, fn_t), (void*)printf);
   return CUP_GEN_DONE;
 }
 #endif
 
-void symbol_cb(void *ctx, const char *name, const CVariable var) {
+void symbol_cb(void *ctx, const char *name, const CUPType *type, size_t value, size_t scope) {
   (void)ctx;
   char tname[256];
-  cup_type_snname(tname, sizeof(tname), var.type);
-  printf("%s[%ld], type= %s, value= %ld\n", name, var.scope, tname, var.value);
+  cup_type_snname(tname, sizeof(tname), type);
+  printf("%s[%ld], type= %s, value= %ld\n", name, scope, tname, value);
 }
 
 int main(int argc, char **argv) {
@@ -168,10 +155,10 @@ int main(int argc, char **argv) {
     const CUPType ft3_p = cup_type_pointer(&cup_type_uint8);
     const CUPType ft3 = cup_type_function(&cup_type_void, &ft3_p);
 #if CUPE
-    const CUPType gent = cup_type_generator(printf_wrapper);
-    const CUPType gent2 = cup_type_generator(get_size_wrapper);
-    cup_add_symbol(state, "printf", (void *)printf, gent);
-    cup_add_symbol(state, "sizeof", (void *)get_size, gent2);
+    const CUPTypeExt gent = cup_type_generator(printf_wrapper);
+    const CUPTypeExt gent2 = cup_type_generator(get_size_wrapper);
+    cup_add_symbol(state, "printf", NULL, gent.cuptype);
+    cup_add_symbol(state, "sizeof", NULL, gent2.cuptype);
 #endif
     //const CUPType ft3 = cup_type_function(&cup_type_int, &cup_type_int);
     cup_add_symbol(state, "print", (void *)myprint, ft);
@@ -252,7 +239,7 @@ int main(int argc, char **argv) {
   CVariable *add = cup_get_symbol(state, "s");
   CVariable *a = cup_get_symbol(state, "a");
   if (a) {
-    size_t* arrs = (size_t*)a->value;
+    size_t* arrs = (size_t*)cup_var_value(a);
     printf("a = %p\n", arrs);
     if (arrs) {
       printf("a[0] = %ld\n", arrs[0]);
@@ -267,7 +254,7 @@ int main(int argc, char **argv) {
     //size_t r = 251;
     //r = ((Ft)minus->value)(0);
     //printf("minus(0) -> %ld\n", r);
-    printf("s(2) -> %ld\n", ((Ft)add->value)(2));
+    printf("s(2) -> %ld\n", ((Ft)cup_var_value(add))(2));
   }
   cup_list_symbols(state, NULL, symbol_cb);
 #endif

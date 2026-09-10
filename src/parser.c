@@ -16,20 +16,16 @@
   assert(node2);\
   vector_fpushT(nodes.vec, node2)
 
-void* cup_var_value(CVariable* var) {
+void* cup_var_value(const CVariable* var) {
   if (var == NULL)
     return NULL;
   return (void*)var->value;
 }
-/*
-const CUPType* cup_var_type(CUPState* state, const CVariable* var) {
-  if (state == NULL || var == NULL)
-    return NULL;
-  if (var->type == NULL)
+const CUPType* cup_var_type(const CVariable* var) {
+  if (var == NULL)
     return NULL;
   return var->type;
 }
-*/
 
 Nodes primary(CUPState *state, uint8_t mpower);
 
@@ -70,7 +66,13 @@ void scope_leave(CUPState *state) {
   state->scope = parent;
 }
 
-void putVar(CUPState *state, size_t name, CVariable var) {
+void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope) {
+  CVariable var = {{type}, value, scope};
+  printf("%s %ld\n", getString(state, name), var.scope);
+  map_put(&state->symmap, name, &var, SIZE_MAX);
+}
+
+void putVar2(CUPState *state, size_t name, CVariable var) {
   printf("%s %ld\n", getString(state, name), var.scope);
   map_put(&state->symmap, name, &var, SIZE_MAX);
 }
@@ -325,7 +327,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     char tname[256];
     CVariable* vvv = getVars(state, name, state->scope);
     if (vvv == NULL) {
-      putVar(state, name, (CVariable){NULL, 0, state->scope});
+      putVar(state, name, NULL, 0, state->scope);
     } else {
       if (vvv->type) {
         cup_type_snname(tname, sizeof(tname), vvv->type);
@@ -354,7 +356,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
     types[argc + 1] = &cup_type_void;
-    CUPType fn_t = (CUPType){ sizeof(void *), (uint16_t)sizeof(void *), CUP_TYPE_FUNCTION, {types} };
+    CUPType fn_t = (CUPType){ sizeof(void *), CUP_TYPE_FUNCTION, (uint16_t)sizeof(void *), types };
     const CUPType *type = cup_type_put(state, fn_t);
     cup_treset(0);
     cup_type_snname(tname, sizeof(tname), type);
@@ -408,7 +410,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     size_t name = state->nodes.value;
     CVariable* v = getVars(state, name, state->scope);
     if (v == NULL) {
-      putVar(state, name, (CVariable){NULL, 0, state->scope});
+      putVar(state, name, NULL, 0, state->scope);
     } else {
       // TODO: check is it conflict name and type
       //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";

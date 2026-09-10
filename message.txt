@@ -1,0 +1,186 @@
+Псевдокод: AST-проход, типизация, оптимизация и регенерация вызовов
+Ниже — концептуальный псевдокод. Идея: обходим AST, выводим типы, собираем «регенератор» (по сути — таблицу мемоизации + rewrite-правила), и при повторном вызове функции подменяем узел Call на уже вычисленное значение или на другой, более дешёвый вызов.
+
+pseudo
+// ============================================================
+// 1. Структуры данных
+// ============================================================
+
+type Type =
+    | Int
+    | Float
+    | Bool
+    | Unknown
+    | Func(params: [Type], ret: Type)
+
+type Node =
+    | Literal(value, type)
+    | Ident(name)
+    | BinOp(op, left, right)
+    | Call(callee, args: [Node])
+    | If(cond, then, else)
+    | Return(expr)
+    | FuncDecl(name, params, body)
+
+// Регенератор — кэш результатов + правила подмены
+type Regenerator = {
+    cache:      Map<Key, Value>,      // (funcName, argsHash) -> результат
+    rewrites:   Map<Key, Node>,       // (funcName, argsHash) -> узел-замена
+    pureFuncs:  Set<name>,            // функции, безопасные для подмены
+}
+
+keyOf(call: Call): Key =
+    return (call.callee.name, hash(call.args))
+2. Проход по AST с типизацией
+pseudo
+function inferTypes(node, env, regenerator) -> (node', Type):
+    match node:
+
+        case Literal(v, t):
+            return (node, t)
+
+        case Ident(name):
+            return (node, lookup(env, name) ?? Unknown)
+
+        case BinOp(op, l, r):
+            (l', lt) = inferTypes(l, env, regenerator)
+            (r', rt) = inferTypes(r, env, regenerator)
+            resultType = unify(lt, rt, op)     // Int+Int=Int, Int+Float=Float, ...
+            return (BinOp(op, l', r'), resultType)
+
+        case If(c, t, e):
+            (c', _) = inferTypes(c, env, regenerator)
+            (t', tt) = inferTypes(t, env, regenerator)
+            (e', et) = inferTypes(e, env, regenerator)
+            return (If(c', t', e'), join(tt, et))
+
+        case Call(callee, args):
+            // 1) типизируем аргументы
+            typedArgs = []
+            for a in args:
+                (a', _) = inferTypes(a, env, regenerator)
+                typedArgs.push(a')
+
+            // 2) проверяем, можно ли подменить вызов
+            replacement = tryRegenerate(callee.name, typedArgs, regenerator)
+            if replacement != null:
+                return (replacement, typeOf(replacement, env))
+
+            // 3) иначе — обычная типизация вызова
+            fnType = lookup(env, callee.name)
+            return (Call(callee, typedArgs), fnType.ret)
+
+        case FuncDecl(name, params, body):
+            localEnv = env.extend(params)
+            (body', retType) = inferTypes(body, localEnv, regenerator)
+            // если функция чистая и параметры примитивные — помечаем как кандидат
+            if isPure(body') and allPrimitive(params):
+                regenerator.pureFuncs.add(name)
+            return (FuncDecl(name, params, body'), Func(params, retType))
+
+    return (node, Unknown)
+3. Регенератор: подмена вызова
+pseudo
+function tryRegenerate(funcName, args, regenerator) -> Node? :
+    // Подменяем только «чистые» функции с известными примитивными аргументами
+    if funcName not in regenerator.pureFuncs:
+        return null
+
+    if not all(isLiteral(a) for a in args):
+        return null
+
+    k = keyOf(Call(Ident(funcName), args))
+
+    // 3.1. Уже видели этот вызов? — вернём сохранённый узел-замену
+    if regenerator.rewrites.has(k):
+        return regenerator.rewrites.get(k)
+
+    // 3.2. Можно ли вычислить немедленно (функция без побочек, аргументы — константы)?
+    if isConstantFoldable(funcName, args):
+        value = evalConstant(funcName, args)
+        node  = Literal(value, typeOfValue(value))
+
+        // запоминаем результат и правило подмены
+        regenerator.cache[k]    = value
+        regenerator.rewrites[k] = node
+        return node
+
+    // 3.3. Нельзя свернуть — но можно запомнить вызов, чтобы позже
+    //      заменить его на ссылку/другую функцию (например, на мемоизированную версию)
+    if isMemoizable(funcName):
+        memoName = "memo_" + funcName
+        node     = Call(Ident(memoName), args)
+        regenerator.rewrites[k] = node
+        return node
+
+    return null
+4. Главная функция обхода
+pseudo
+function optimizeAST(ast, env) -> (ast', Regenerator):
+    regenerator = {
+        cache:     {},
+        rewrites:  {},
+        pureFuncs: {}
+    }
+
+    // Первый проход: собрать объявления функций (чтобы знать типы и чистоту)
+    for decl in ast.decls where decl is FuncDecl:
+        env = env.extend(decl.name, Func(decl.params, Unknown))
+
+    // Второй проход: типизация + оптимизация + регенерация
+    newDecls = []
+    for decl in ast.decls:
+        (decl', _) = inferTypes(decl, env, regenerator)
+        newDecls.push(decl')
+
+    return ({ decls: newDecls }, regenerator)
+5. Пример использования
+Исходный код:
+
+text
+@fib(g) {
+  if (g <= 1) { return g }
+  return fib(g - 1) + fib(g - 2)
+}
+
+x = fib(5)
+y = fib(5)     // повторный вызов — должен быть подменён
+z = fib(3)     // тоже уже известен из рекурсии
+Проход:
+
+text
+1. inferTypes(FuncDecl fib) → помечаем fib как pureFunc
+2. inferTypes(Call fib(5)):
+   - tryRegenerate("fib", [5]):
+     - isConstantFoldable → true
+     - evalConstant("fib", [5]) = 5
+     - rewrites[(fib,5)] = Literal(5)
+   → узел заменяется на Literal(5)
+3. inferTypes(Call fib(5)) снова:
+   - tryRegenerate попадает в rewrites → сразу Literal(5)
+4. inferTypes(Call fib(3)):
+   - при вычислении fib(5) мы уже закешировали fib(3)=2 (если evalConstant
+     рекурсивно пополняет regenerator.cache)
+   → Literal(2)
+Результат после оптимизации:
+
+text
+@fib(g) { ... }         // остаётся как есть, либо удаляется как мёртвый код
+x = 5
+y = 5
+z = 2
+6. Ключевые идеи
+Компонент	Роль
+AST-проход	Обходит дерево, выводит типы, помечает чистые функции
+Type inference	Нужен, чтобы понять, безопасно ли сворачивать вызов и какой тип у результата
+Regenerator	Хранит правила подмены: (funcName, args) → Node
+Constant folding	Если аргументы — литералы и функция чистая, считаем сразу
+Memoization rewrite	Если свернуть нельзя, но функция чистая — заменяем на memo_func
+Повторный вызов	Просто достаём готовый узел из rewrites
+Если хочешь, могу:
+
+добавить обработку побочных эффектов (side effects) и эффект-систему;
+
+показать, как это выглядит для fib с мемоизацией (замена fib → memo_fib);
+
+расписать unify/join для типов подробнее.

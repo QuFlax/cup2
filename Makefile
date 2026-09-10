@@ -18,7 +18,7 @@ SRC_FILES := \
 	$(SRC_DIR)/types.c \
 	$(SRC_DIR)/moduler.c \
 	$(SRC_DIR)/codegen/x64codegen.c \
-	$(SRC_DIR)/typechecker.c \
+	$(SRC_DIR)/resolver.c \
 	$(SRC_DIR)/objwrite.c
 
 OBJ_FILES := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRC_FILES))

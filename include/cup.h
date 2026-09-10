@@ -117,6 +117,17 @@ typedef struct Node2 {
     };
 } Node2;
 
+struct CVariable {
+    union {
+        const CUPType    *type; /**< Variable type */
+        const CUPTypeExt *etype; /**< Variable type */
+    };
+    //size_t name;         /**< Offset into string-intern table */
+    size_t value;         /**< Variable value / symbol address */
+    size_t scope;
+    //size_t parent;
+};
+
 void importModule(CUPState* state);
 void externalModule(CUPState* state);
 
@@ -141,7 +152,7 @@ uint8_t       *idToken(CUPState *state, const char *str, size_t len);
 void getToken  (CUPState *state, int space);
 //void skipSpaces(CUPState *state);
 
-int defType(CUPState *state, Nodes* nodes);
+int resolve(CUPState *state, Nodes* nodes);
 
 /* ========================================================================== */
 /*                           CODE EMISSION                                    */
@@ -158,6 +169,11 @@ typedef struct CUPModuleList {
 /* ========================================================================== */
 /*                           COMPILER STATE                                   */
 /* ========================================================================== */
+
+struct CUPGenContext {
+    CUPState* state;
+    Node node[3];
+};
 
 struct CUPState {
     /* Source input */
@@ -206,9 +222,10 @@ struct CUPState {
     CUPTarget *target;
     const char *bytecode_path;
     const char *code_path;
+    Nodes ast;
     //CVector vector_;
     
-    size_t l1, l2, l3, l4, l5, l6, l7;
+    size_t l1, l2, l3, l4;
     // CUPCodeGen generator;
 };
 
@@ -228,7 +245,12 @@ typedef struct CVariable {
 
 //CVariable* getVar(CUPState *state, size_t name);
 CVariable *getVars(CUPState *state, size_t name, size_t maxscope);
-void putVar(CUPState *state, size_t name, CVariable var);
+void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope);
+void putVar2(CUPState *state, size_t name, CVariable var);
+
+const CUPType    *cup_type_get(CUPState *state, const CUPType type);
+const CUPType    *cup_type_put(CUPState *state, const CUPType type);
+const CUPType    *cup_type_parse(CUPState* state, const char* sig);
 
 size_t scope_enter(CUPState *state);
 void scope_leave(CUPState *state);

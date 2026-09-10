@@ -8,8 +8,5 @@ cup.elf
 *.o
 *.so
 test.txt
-fib.c
 test.b
 test.i
-cod.c
-out.o

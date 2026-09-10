@@ -141,7 +141,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
   }
   //CVARS vars = {.vars = {{type, (size_t)fn, 1}}};
   //map_put(&state->symmap, name_idx, &vars, sizeof(CVARS), SIZE_MAX);
-  putVar(state, name_idx, (CVariable){type, (size_t)fn, 0});
+  putVar(state, name_idx, type, (size_t)fn, 0);
 }
 
 void printInstructions(FILE *out, CUPModule *m) {
@@ -157,10 +157,10 @@ void printInstructions(FILE *out, CUPModule *m) {
   // fprintf(out, "-- end --\n");
 }
 
-static void symbol_cb(void *ctx, const char *name, const CVariable var) {
+static void symbol_cb(void *ctx, const char *name, const CUPType *type, size_t value, size_t scope) {
   char tname[256];
-  cup_type_snname(tname, sizeof(tname), var.type);
-  fprintf((FILE*)ctx, "%s[%ld], type= %s, value= %ld\n", name, var.scope, tname, var.value);
+  cup_type_snname(tname, sizeof(tname), type);
+  fprintf((FILE*)ctx, "%s[%ld], type= %s, value= %ld\n", name, scope, tname, value);
 }
 
 static void cup_write_bytecode(CUPState *state, const NRange range) {
@@ -210,18 +210,13 @@ static void cup_write_bytecode(CUPState *state, const NRange range) {
   state->bytecode_path = NULL;
 }
 
-void codegen(CUPState *state, CUPModule *m, NRange range) {
-  size_t init = 0;
-  //const NRange range = state->range;
-  //state->vector_ = (CVector){};
-  state->scope = 0;
-  codegen_func(state, m, &range, &init, 0);
-  //m->range = range;
+void codegen(CUPState *state, CUPModule *m, Nodes nodes, size_t* init) {
+  NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+  codegen_func(state, m, &range, init, 0);
   void *page = allocMemory(m->size);
   memcpy(page, m->data, m->size);
   cup_free(m->data);
   m->data = page;
-
   CRealloc *rptr = m->reallocs.data;
   for (size_t i = m->reallocs.size / sizeof(CRealloc); i--;)
   {
@@ -250,11 +245,6 @@ void codegen(CUPState *state, CUPModule *m, NRange range) {
   // printf("init = %zx\n", init);
 
   // symmap_iter(&state->symmap, state, printVar);
-
-  printf("page = %p, init = %p\n", page, (void *)init);
-  typedef void *(*JitFunc)();
-  void *r = ((JitFunc)init)();
-  printf("r = %p\n", r);
 }
 
 CUPModule *parse(CUPState *state, const char *buf, const char *file) {
@@ -287,14 +277,20 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
     push_vector(&nodes.vec, n.vec);
   }
 
-  int def = defType(state, &nodes);
+  state->scope = 0;
+  size_t init = 0;
+  codegen(state, &m->module, nodes, &init);
+  printf("page = %p, init = %p\n", m->module.data, (void *)init);
   NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
   if (state->bytecode_path)
-    cup_write_bytecode(state, range);
-  if (def == 0) {
-    codegen(state, &m->module, range);
-  }
+    cup_write_bytecode(state, range); // NO -O
+  int def = resolve(state, &nodes);
   cup_free(nodes.data);
+#if 0 // def
+  typedef void *(*JitFunc)();
+  void *r = ((JitFunc)init)();
+  printf("r = %p\n", r);
+#endif
 
   state->priv_stream = priv_stream;
   state->input_stream = input_stream;
@@ -338,7 +334,7 @@ CUPState *cup_new(int target) {
   cup_calloc(state, CUPState);
   cup_calloc(names, DCHART);
   state->names = (uint8_t *)(names + 1);
-  CVariable def = {NULL, 0, 0};
+  CVariable def = {{NULL}, 0, 0};
   map_init(&state->symmap, SIZE_MAX, sizeof(def), &def);
   scope_enter(state);
   return state;
@@ -432,7 +428,7 @@ int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType t
   // symmap_put(&state->symmap, state->nodes.value, t, (size_t)val, 0);
   //CVARS vars = {.vars = {{t, (size_t)val, 1}}};
   //map_put(&state->symmap, state->nodes.value, &vars, sizeof(CVARS), SIZE_MAX);
-  putVar(state, state->nodes.value, (CVariable){t, (size_t)val, 1});
+  putVar(state, state->nodes.value, t, (size_t)val, 1);
   return 0;
 }
 CVariable *cup_get_symbol(CUPState *state, const char *name) {
@@ -456,9 +452,10 @@ static void map_iter_symbols(void *ctx, const CMapItem *item) {
 #else
 static void map_iter_symbols(void *ctx, const CMapItem *item) {
   SymbolIterCtx *ctxd = ctx;
+  const CVariable * var = (const CVariable *)item->data;
   ctxd->cb(ctxd->user_ctx,
-    getString(ctxd->state, item->key),
-    *(const CVariable *)item->data);
+    getString(ctxd->state, item->key), 
+    var->type, var->value, var->scope);
 }
 #endif
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {

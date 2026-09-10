@@ -32,11 +32,13 @@ int cup_version_major();
 int cup_version_minor();
 int cup_version();
 
-typedef union  Node      Node;
-typedef struct CUPState  CUPState;
-typedef struct CUPModule CUPModule;
-typedef struct CUPType   CUPType;
-typedef struct CVariable CVariable;
+typedef union  Node       Node;
+typedef struct CUPState   CUPState;
+typedef struct CUPModule  CUPModule;
+typedef struct CUPType    CUPType;
+typedef union  CUPTypeExt CUPTypeExt;
+typedef struct CVariable  CVariable;
+typedef struct CUPGenContext CUPGenContext;
 
 /* ========================================================================== */
 /*                              ALLOCATOR / LOGGER                            */
@@ -69,17 +71,6 @@ void cup_set_error_func(CUP_Log_Fn error_func);
 /*                              TYPE SYSTEM                                   */
 /* ========================================================================== */
 
-typedef enum CUP_GEN_RESULT {
-    CUP_GEN_ERROR = -1,
-    CUP_GEN_CONTINUE = 0,
-    CUP_GEN_DONE   = 1
-} CUP_GEN_RESULT;
-
-//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state, CUPValue* args, size_t max, const CUPType** rtype);
-typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
-    const CUPType **argtypes, void **argvalues,
-    size_t max);
-
 typedef enum CUP_TYPE {
     CUP_TYPE_VOID,
     CUP_TYPE_INT,
@@ -103,12 +94,9 @@ typedef enum CUP_TYPE {
 
 struct CUPType {
     size_t size;
-    uint16_t alignment;
     uint16_t type;
-    union {
-        const CUPType **elements;
-        CUP_Type_Gen gen;
-    };
+    uint16_t alignment;
+    const CUPType **elements;
 };
 
 CUP_EXTERN CUPType cup_type_void;
@@ -126,8 +114,8 @@ CUP_EXTERN CUPType cup_type_sint64;
 
 #define cup_type_pointer(_type) (CUPType) { \
         .size = __SIZEOF_POINTER__, \
-        .alignment = (uint16_t)sizeof(void *), \
         .type = CUP_TYPE_POINTER, \
+        .alignment = (uint16_t)sizeof(void *), \
         .elements = (const CUPType *[]){ \
             (_type), \
             NULL \
@@ -136,8 +124,8 @@ CUP_EXTERN CUPType cup_type_sint64;
 
 #define cup_type_array(_type, _size) (CUPType) { \
         .size = _size, \
-        .alignment = 0, \
         .type = CUP_TYPE_ARRAY, \
+        .alignment = 0, \
         .elements = (const CUPType *[]){ \
             (_type), \
             NULL \
@@ -146,8 +134,8 @@ CUP_EXTERN CUPType cup_type_sint64;
 
 #define cup_type_function(_type, ...) (CUPType) { \
         .size = sizeof(void *), \
-        .alignment = (uint16_t)sizeof(void *), \
         .type = CUP_TYPE_FUNCTION, \
+        .alignment = (uint16_t)sizeof(void *), \
         .elements = (const CUPType *[]){ \
             (_type), \
             __VA_ARGS__, \
@@ -155,24 +143,12 @@ CUP_EXTERN CUPType cup_type_sint64;
         } \
     }
 
-#define cup_type_generator(_func) (CUPType){ \
-        .size = 0, \
-        .alignment = 0, \
-        .type = CUP_TYPE_GENERATOR, \
-        .gen = (_func) \
-    }
-
 /** @brief Return a human-readable name for a type (freshly allocated). */
 size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
 //char *cup_type_name(const CUPType *type);
 
-struct CVariable {
-    const CUPType *type; /**< Variable type */
-    //size_t name;         /**< Offset into string-intern table */
-    size_t value;         /**< Variable value / symbol address */
-    size_t scope;
-    //size_t parent;
-};
+void* cup_var_value(const CVariable* var);
+const CUPType* cup_var_type(const CVariable* var);
 
 const uint8_t *getData(CUPState *state, size_t i);
 const char    *getString(CUPState *state, size_t index);
@@ -214,8 +190,7 @@ void cup_delete(CUPState *state);
  * @brief Register an external symbol.
  * @return 0 on success, negative error code otherwise.
  */
-int cup_add_symbol(CUPState *state, const char *name, void *val,
-                   CUPType type);
+int cup_add_symbol(CUPState *state, const char *name, void *val, CUPType type);
 
 /**
  * @brief Look up a symbol by name.
@@ -228,9 +203,10 @@ CVariable *cup_get_symbol(CUPState *state, const char *name);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
 #ifdef CUPLISTSTATEINSL
-typedef void (*cup_list_symbols_callback)(CUPState *state, void *ctx, const char *name, const CVariable var);
+//typedef void (*cup_list_symbols_callback)(CUPState *state, void *ctx, const char *name, const CVariable var);
 #else
-typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const CVariable var);
+typedef void (*cup_list_symbols_callback)(void *ctx, const char *name,
+    const CUPType *type, size_t value, size_t scope);
 #endif
 
 /** @brief Iterate over all registered symbols. */

@@ -4,6 +4,17 @@
 #define CUP_DEFTYPE_MAX_PASSES 64
 #endif
 
+void cup_gen_value(CUPGenContext *ctx, const CUPType *type, void *value) {
+
+}
+
+void cup_gen_call(CUPGenContext *ctx, const CUPType *rtype, void *value) {
+  (void)ctx;
+  (void)rtype;
+  (void)value;
+  assert(0);
+}
+
 static inline Node* getNode(Nodes nodes, size_t* i) {
   if (*i >= (nodes.size / sizeof(*nodes.data))) {
     cup_error("Incorrect Nodes");
@@ -74,6 +85,7 @@ const CUPType* promote(const CUPType* left, const CUPType* right) {
   return left;
 }
 
+/*
 static CUP_GEN_RESULT fffs(CUPState* state, const CUPType **argtypes, void **argvalues, size_t max) {
   (void)state;
   const CUPType* type = NULL;
@@ -93,7 +105,7 @@ static CUP_GEN_RESULT fffs(CUPState* state, const CUPType **argtypes, void **arg
   //argtypes[0] = type;
   return CUP_GEN_DONE;
 }
-
+*/
 
 int defTypeU(CUPState *state, Nodes nodes, size_t* i, CUPValue* rvalue, const CUPType** rtype);
 
@@ -506,8 +518,9 @@ int defTypeUR(CUPState *state, Nodes nodes, size_t* i, CUPValue* value, const CU
 typedef struct defCTX {
   CUPState* state;
   Nodes* nodes;
-  size_t* i;
-  size_t extra;
+  Nodes* new;
+  //size_t* i;
+  //size_t extra;
 } defCTX; //websdr
 
 typedef CUPValue (*CUPValueFor)(defCTX ctx, size_t** values, const CUPType** types);
@@ -593,9 +606,9 @@ static CUPValue defTypeUU(defCTX ctx, size_t* i, CUPValueFor fn) {
     rvalue = (CUPValue){CV_VALUE, .as.c1 = {&cup_type_int, &getNode(*ctx.nodes, i)->value } };
     break;
   case T_STRING: case T_MSTRING: {
-    size_t* id = &(getNode(*ctx.nodes, i)->value);
-    const CUPType t = cup_type_array(&cup_type_uint8, strlen((char*)getData(ctx.state, *id)) + 1);
-    rvalue = (CUPValue){CV_VALUE, .as.c1 = {cup_type_put(ctx.state, t), id} };
+    const uint8_t* str = getData(ctx.state, getNode(*ctx.nodes, i)->value);
+    const CUPType t = cup_type_array(&cup_type_uint8, strlen((char*)str) + 1);
+    rvalue = (CUPValue){CV_VALUE, .as.c1 = {cup_type_put(ctx.state, t), (size_t*)str} };
     }
     break;
   case N_VARIABLE: {
@@ -789,7 +802,8 @@ static CUPValue defTypeUU(defCTX ctx, size_t* i, CUPValueFor fn) {
     }
     if (left.as.c2.variable->type->type == CUP_TYPE_GENERATOR) {
       size_t count = ((size_t*)right.as.c3.types)[-1];
-      CUP_GEN_RESULT r = left.as.c2.variable->type->gen(ctx.state, right.as.c3.types, (void**)right.as.c3.values, count);
+      CUPGenContext gc = {ctx.state};
+      CUP_GEN_RESULT r = ((CUPTypeExt*)left.as.c2.variable->type)->gen(&gc, right.as.c3.types, right.as.c3.values, count);
       if (r == CUP_GEN_CONTINUE) {
         assert(0);
       }
@@ -801,7 +815,7 @@ static CUPValue defTypeUU(defCTX ctx, size_t* i, CUPValueFor fn) {
       cup_free(right.as.c3.values);
       return value;
     }
-    (void)save;
+    (void)save; (void)end;
     assert(0);
     }
     break;
@@ -830,7 +844,9 @@ int defType(CUPState *state, Nodes* nodes) {
     cup_error("defType: state is NULL");
     return 1;
   }
-  defCTX ctx = { state, nodes, NULL, 0 };
+  return 1;
+  Nodes nnodes = {};
+  defCTX ctx = { state, nodes, &nnodes };
   //size_t scope = 0;
   SSC index = {0, 0};
   SSCs pending = {};
