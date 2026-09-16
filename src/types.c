@@ -1,9 +1,18 @@
 #include "../include/cup.h"
 #include <ctype.h>
 
-#define CUPTypeD(T,N) (CUPType){sizeof(T), sizeof(T), N, {}};
+#if 0
+struct CUPType {
+    uint8_t type;
+    uint8_t alignment;
+    uint16_t size;
+    const CUPType **elements;
+};
+#endif
 
-CUPType cup_type_void = (CUPType){0, 0, CUP_TYPE_VOID, {}};
+#define CUPTypeD(T,N) (CUPType){N, (uint8_t)sizeof(T), (uint16_t)sizeof(T), NULL};
+
+CUPType cup_type_void = (CUPType){0, CUP_TYPE_VOID, 0, NULL};
 CUPType cup_type_int = CUPTypeD(size_t, CUP_TYPE_INT);
 CUPType cup_type_float = CUPTypeD(float, CUP_TYPE_FLOAT);
 CUPType cup_type_double = CUPTypeD(double, CUP_TYPE_DOUBLE);
@@ -17,91 +26,146 @@ CUPType cup_type_uint64 = CUPTypeD(uint64_t, CUP_TYPE_UINT64);//{8, 8, CUP_TYPE_
 CUPType cup_type_sint64 = CUPTypeD(int64_t, CUP_TYPE_SINT64);//{, 8, CUP_TYPE_SINT64, {0}};
 //CUPType cup_type_efunction = cup_type_function(&cup_type_void, &cup_type_void);
  
-const CUPType* cup_type_get(CUPState *state, const CUPType type) {
-  if (state == NULL) return NULL;
-  if (memcmp(&cup_type_void, &type, sizeof(type)) == 0) return &cup_type_void;
-  if (memcmp(&cup_type_int, &type, sizeof(type)) == 0) return &cup_type_int;
-  if (memcmp(&cup_type_float, &type, sizeof(type)) == 0) return &cup_type_float;
-  if (memcmp(&cup_type_double, &type, sizeof(type)) == 0) return &cup_type_double;
-  if (memcmp(&cup_type_uint8, &type, sizeof(type)) == 0) return &cup_type_uint8;
-  if (memcmp(&cup_type_sint8, &type, sizeof(type)) == 0) return &cup_type_sint8;
-  if (memcmp(&cup_type_uint16, &type, sizeof(type)) == 0) return &cup_type_uint16;
-  if (memcmp(&cup_type_sint16, &type, sizeof(type)) == 0) return &cup_type_sint16;
-  if (memcmp(&cup_type_uint32, &type, sizeof(type)) == 0) return &cup_type_uint32;
-  if (memcmp(&cup_type_sint32, &type, sizeof(type)) == 0) return &cup_type_sint32;
-  if (memcmp(&cup_type_uint64, &type, sizeof(type)) == 0) return &cup_type_uint64;
-  if (memcmp(&cup_type_sint64, &type, sizeof(type)) == 0) return &cup_type_sint64;
-  if (type.type == CUP_TYPE_ARRAY)
-    return NULL;
+static const CUPType* cup_type_getEx(CUPState *state, CUP_TYPE type, uint16_t size, void** data) {
   size_t count = state->types.size / sizeof(CUPType*);
   for (size_t i = 0; i < count; i++) {
-    if (memcmp(state->types.data[i], &type, sizeof(type)) == 0)
-      return state->types.data[i];
+    const CUPType* ptr = state->types.data[i];
+    if (ptr->type != type) continue;
+    if (ptr->size != size) continue;
+    if (ptr->elements == data) return ptr;
+    if (type == CUP_TYPE_FUNCTION) {
+      const CUPType* ptrj = NULL;
+      for (size_t j = 0; j < size; j++) {
+        const CUPType* ptrj = ptr->elements[j];
+        if (ptrj != data[j])
+          break;
+        if (ptrj == &cup_type_void)
+          assert(0);
+      }
+      if (ptrj == &cup_type_void)
+        return ptr;
+    } else if (type != CUP_TYPE_GENERATOR && ptr->elements[0] == data[0]) return ptr;
   }
   return NULL;
 }
-const CUPType* cup_type_put(CUPState *state, const CUPType type) {
-  const CUPType* t = cup_type_get(state, type);
+
+static const CUPType* cup_type_get(CUPState *state, CUP_TYPE type, uint16_t size, void** data) {
+  if (state == NULL) return NULL;
+  switch (type) {
+  default: assert(0);
+  case CUP_TYPE_VOID: return &cup_type_void;
+  case CUP_TYPE_INT: return &cup_type_int;
+  case CUP_TYPE_FLOAT: return &cup_type_float;
+  case CUP_TYPE_DOUBLE: return &cup_type_double;
+  case CUP_TYPE_UINT8: return &cup_type_uint8;
+  case CUP_TYPE_SINT8: return &cup_type_sint8;
+  case CUP_TYPE_UINT16: return &cup_type_uint16;
+  case CUP_TYPE_SINT16: return &cup_type_sint16;
+  case CUP_TYPE_UINT32: return &cup_type_uint32;
+  case CUP_TYPE_SINT32: return &cup_type_sint32;
+  case CUP_TYPE_UINT64: return &cup_type_uint64;
+  case CUP_TYPE_SINT64: return &cup_type_sint64;
+  case CUP_TYPE_STRUCT: assert(0);
+  case CUP_TYPE_POINTER: 
+  case CUP_TYPE_ARRAY:
+  case CUP_TYPE_GENERATOR:
+  case CUP_TYPE_FUNCTION:
+    return cup_type_getEx(state, type, size, data);
+  }
+}
+
+const CUPType* cup_typef(CUPState* state, uint8_t count, ...) {
+  va_list args;
+  va_start(args, count);
+  const CUPType* r = cup_vtypef(state, count, args);
+  va_end(args);
+  return r;
+}
+
+const CUPType* cup_vtypef(CUPState* state, uint8_t count, va_list args) {
+  size_t size = (count + 1) * sizeof(const CUPType *);
+  const CUPType** elements = (const CUPType**)cup_malloc(size);
+  memset(elements, 0, size);
+  elements[count] = &cup_type_void;
+  for (size_t j = 0; j < count; j++) {
+    const CUPType *element = va_arg(args, const CUPType *);
+    if (element == NULL) {
+      elements[j] = NULL; /* unknown/any parameter */
+    } else if (element == &cup_type_void && j != 0) {
+      assert(j != 0);
+    } else {
+      elements[j] = cup_type(state, element->type, element->size, element->elements);
+    }
+  }
+  const CUPType* r = cup_type(state, CUP_TYPE_FUNCTION, count, elements);
+  cup_free(elements);
+  return r;
+}
+
+const CUPType* cup_typeGen(CUPGenContext* ctx, CUP_TYPE type, uint16_t size, const CUPType **elements) {
+  return cup_type(ctx->state, type, size, elements);
+}
+
+const CUPType* cup_typeExt(CUPState* state, CUP_Type_Gen gen) {
+  return cup_type(state, CUP_TYPE_GENERATOR, 0, (const CUPType **)gen);
+}
+
+const CUPType* cup_type(CUPState* state, CUP_TYPE type, uint16_t size, const CUPType **elements) {
+  const CUPType* t = cup_type_get(state, type, size, (void*)elements);
   if (t) return t;
   CUPType* newt = NULL;
-  size_t i = 0;
-  if (type.elements) {
-    if (type.type == CUP_TYPE_FUNCTION) {
-      i = 1;
-      while (type.elements[i] != &cup_type_void) i++;
+  if (elements) {
+    if (type == CUP_TYPE_GENERATOR) {
+      newt = (CUPType*)cup_malloc(sizeof(CUPType));
+      memset(newt, 0, sizeof(CUPType));
+      newt->elements = elements;
+    } else if (type == CUP_TYPE_FUNCTION) {
+      size_t i = 1;
+      while (elements[i] != &cup_type_void) i++;
       /* Include return type, all parameter slots, and the void sentinel. */
       size_t temp_size = (i + 1) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
       newt->elements = (const CUPType **)(newt + 1);
       for (size_t j = 0; j <= i; j++) {
-        const CUPType *element = type.elements[j];
+        const CUPType *element = elements[j];
         if (element == NULL) {
           newt->elements[j] = NULL; /* unknown/any parameter */
         } else if (element == &cup_type_void) {
           newt->elements[j] = &cup_type_void; /* end sentinel */
         } else {
-          newt->elements[j] = cup_type_put(state, *element);
+          newt->elements[j] = cup_type(state, element->type, element->size, element->elements);
         }
       }
-    } else if (type.type == CUP_TYPE_GENERATOR) {
-      size_t temp_size = (1) * sizeof(*newt->elements) + sizeof(CUPType);
-      newt = (CUPType*)cup_malloc(temp_size);
-      memset(newt, 0, temp_size);
-      ((CUPTypeExt*)newt)->gen = ((CUPTypeExt)type).gen;
-    } else if (type.type == CUP_TYPE_ARRAY) {
+    } else if (type == CUP_TYPE_ARRAY || type == CUP_TYPE_POINTER) {
       size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
       newt = (CUPType*)cup_malloc(temp_size);
       memset(newt, 0, temp_size);
       newt->elements = (const CUPType **)(newt + 1);
-      if (type.elements[i])
-        newt->elements[i] = cup_type_put(state, *type.elements[i]);
-    } else if (type.type == CUP_TYPE_POINTER) {
-      size_t temp_size = (2) * sizeof(*newt->elements) + sizeof(CUPType);
-      newt = (CUPType*)cup_malloc(temp_size);
-      memset(newt, 0, temp_size);
-      newt->elements = (const CUPType **)(newt + 1);
-      newt->elements[i] = cup_type_put(state, *type.elements[i]);
+      if (elements[0])
+        newt->elements[0] = cup_type(state, elements[0]->type, elements[0]->size, elements[0]->elements);
+      else {
+        assert(0);
+      }
     } else {
-      char tname[256];
-      cup_type_snname(tname, sizeof(tname), &type);
-      cup_errorf("cup_type_put UNKNOWN %s", tname);
+      //char tname[256];
+      //cup_type_snname(tname, sizeof(tname), &type);
+      //cup_errorf("cup_type UNKNOWN %s", tname);
+      cup_error("cup_type UNKNOWN");
       exit(22);
     }
   } else {
-    cup_calloc(newt, CUPType);
+    //cup_calloc(newt, CUPType);
+    newt = (CUPType*)cup_malloc(sizeof(CUPType));
+    memset(newt, 0, sizeof(CUPType));
   }
-  newt->type = type.type;
-  newt->alignment = type.alignment;
-  newt->size = type.size;
+  newt->type = type;
+  newt->alignment = 0; // TODO
+  newt->size = size;
   vector_pushT(state->types.vec, newt);
   // assert(type.alignment != 0);
   // assert(type.size != 0);
   return newt;
-}
-
-const CUPType *cup_type_puts(CUPGenContext *ctx, const CUPType type) {
-  return cup_type_put(ctx->state, type);
 }
 
 const CUPType* parse_one_type(CUPState* state, const char **p) {
@@ -115,8 +179,7 @@ const CUPType* parse_one_type(CUPState* state, const char **p) {
   else if (len == 1 && start[0] == 'f') base = &cup_type_float;
   else if (len == 1 && start[0] == 'd') base = &cup_type_double;
   else if (len == 1 && start[0] == 'p') {
-    CUPType pt = cup_type_pointer(&cup_type_uint8);
-    return cup_type_put(state, pt);
+    return cup_type(state, CUP_TYPE_POINTER, __SIZEOF_POINTER__, (const CUPType *[]){&cup_type_uint8});
   }
   else if (len == 2 && !memcmp(start,"u8",2))  base = &cup_type_uint8;
   else if (len == 2 && !memcmp(start,"s8",2))  base = &cup_type_sint8;
@@ -133,8 +196,7 @@ const CUPType* parse_one_type(CUPState* state, const char **p) {
   }
 
   while (**p == '*') {
-    CUPType pt = cup_type_pointer(base);
-    base = cup_type_put(state, pt);
+    base = cup_type(state, CUP_TYPE_POINTER, __SIZEOF_POINTER__, (const CUPType *[]){base});
     (*p)++;
   }
   return base;
@@ -165,12 +227,7 @@ const CUPType* cup_type_parse(CUPState* state, const char* sig) {
     memmove(&args[1], &args[0], sizeof(*args) * argc);
     args[argc + 1] = &cup_type_void;
     args[0] = ret;
-    CUPType fn_t = {};
-    fn_t.size = sizeof(void*);
-    fn_t.alignment = (uint16_t)sizeof(void*);
-    fn_t.type = CUP_TYPE_FUNCTION;
-    fn_t.elements = args;
-    return cup_type_put(state, fn_t);
+    return cup_type(state, CUP_TYPE_FUNCTION, argc + 1, args);
   } else {
     if (*p == '\0') return ret;
     cup_errorf("external: expected 'END' in signature '%s'", sig);

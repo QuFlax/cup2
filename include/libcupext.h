@@ -6,7 +6,6 @@
 #define LIBCUP_EXT_H
 
 #include <assert.h>
-#include <stdarg.h>
 
 #ifndef PAGESIZE
 #define PAGESIZE 4096
@@ -26,23 +25,18 @@
 #define cup_calloc(name, T) \
     do { name = (T*)cup_malloc(sizeof(T)); memset(name, 0, sizeof(T)); } while (0)
 
-char *cup_vsprintf(const char *format, va_list args);
-char *cup_sprintf(const char *format, ...);
-char *cup_strdup(const char *str);
+CUP_API char *cup_vsprintf(const char *format, va_list args);
+CUP_API char *cup_sprintf(const char *format, ...);
+CUP_API char *cup_strdup(const char *str);
 
-void* cup_talloc(size_t size);
-void cup_treset(size_t size);
-size_t cup_tpos();
+CUP_API void* cup_talloc(size_t size);
+CUP_API void cup_treset(size_t size);
+CUP_API size_t cup_tpos();
 
 
 /* ========================================================================== */
 /*                           LOGGING HELPERS                                  */
 /* ========================================================================== */
-
-#ifndef CUP_DEBUG
-#  define cup_dbgf(f, ...) ((void)0)
-#  define cup_dbg(msg)     ((void)0)
-#else
 
 #define cup_dbgf(f, ...) \
     do { \
@@ -50,10 +44,8 @@ size_t cup_tpos();
         cup_log(CUP_Level_INFO, _msg); \
         cup_free(_msg); \
     } while (0)
+
 #define cup_dbg(msg) cup_log(CUP_Level_INFO, (msg))
-
-#endif
-
 
 #define cup_warnf(f, ...) \
     do { \
@@ -102,6 +94,13 @@ typedef enum CUP_GEN_RESULT {
     CUP_GEN_DONE   = 1
 } CUP_GEN_RESULT;
 
+typedef struct CUPGenContext CUPGenContext;
+
+struct CUPGenContext {
+    CUPState* state;
+    Node node[3];
+};
+
 /**
  * Generator callback.
  *
@@ -113,8 +112,8 @@ typedef enum CUP_GEN_RESULT {
 typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPGenContext *ctx,
     const CUPType **argtypes, size_t **argvalues, size_t max);
 
-void cup_gen_value(CUPGenContext *ctx, const CUPType *type, void *value);
-void cup_gen_call(CUPGenContext *ctx, const CUPType *rtype, void *value);
+CUP_API void cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
+CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, const CUPType* rtype);
 //void* cup_gen_get_value(CUPGenContext *ctx);
 //CUP_EXTERN size_t cup_gen_add_node(CUPGenContext *ctx, Node node);
 //CUP_EXTERN void cup_gen_set_node(CUPGenContext *ctx, size_t root);
@@ -129,24 +128,28 @@ void cup_gen_call(CUPGenContext *ctx, const CUPType *rtype, void *value);
 union CUPTypeExt {
     CUPType cuptype;
     struct {
-        size_t size;
-        uint16_t type;
-        uint16_t alignment;
+        uint8_t type;
+        uint8_t alignment;
+        uint16_t size;
         CUP_Type_Gen gen;
     };
 };
 
 static_assert(sizeof(CUPType) == sizeof(CUPTypeExt), "sizeof(CUPType) == sizeof(CUPTypeExt)");
 
+CUP_API const CUPType* cup_typeExt(CUPState* state, CUP_Type_Gen gen);
+CUP_API const CUPType* cup_typeGen(CUPGenContext* ctx, CUP_TYPE type, uint16_t size, const CUPType **elements);
+
+#if 0
 #define cup_type_generator(_func) (CUPTypeExt){ \
         .size = 0, \
         .alignment = 0, \
         .type = CUP_TYPE_GENERATOR, \
         .gen = (_func) \
     }
+#endif
 
-
-const CUPType *cup_type_puts(CUPGenContext *ctx, const CUPType type);
+//const CUPType *cup_type_puts(CUPGenContext *ctx, const CUPType type);
 
 /* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
@@ -159,13 +162,14 @@ typedef struct CVector {
     size_t capacity;
 } CVector;
 
-void vector_pop(CVector *vec, size_t sizeT);
-void vector_fpop(CVector *vec, size_t sizeT);
-void vector_push (CVector *vec, const void *data, size_t sizeT);
-void vector_fpush(CVector *vec, const void *data, size_t sizeT);
-void push_vector (CVector *dest, CVector src);   /* consumes src */
-void fpush_vector(CVector *dest, CVector src);   /* consumes src */
-void split_vector(CVector *dest, CVector* src, size_t size);
+CUP_API void vector_new(CVector *vec, size_t sizeT);
+CUP_API void vector_pop(CVector *vec, size_t sizeT);
+CUP_API void vector_fpop(CVector *vec, size_t sizeT);
+CUP_API void vector_push (CVector *vec, const void *data, size_t sizeT);
+CUP_API void vector_fpush(CVector *vec, const void *data, size_t sizeT);
+CUP_API void push_vector (CVector *dest, CVector src);   /* consumes src */
+CUP_API void fpush_vector(CVector *dest, CVector src);   /* consumes src */
+CUP_API void split_vector(CVector *dest, CVector* src, size_t size);
 
 #define vector_pushT(vec, val)  vector_push (&(vec), &(val), sizeof(val))
 #define vector_fpushT(vec, val) vector_fpush(&(vec), &(val), sizeof(val))
@@ -213,18 +217,21 @@ struct CUPModule {
     CUPState *state;
 #endif
     const char *path;
-    uint8_t    *data;
-    size_t     size;
-    CReallocs  reallocs;
+    union { \
+        struct { void *data; size_t size; }; \
+        CVector vec; \
+    };
+
+    //CReallocs  reallocs;
     //NRange     range;
-    CObjRefs   objrefs;
+    //CObjRefs   objrefs;
 };
 
-static_assert(sizeof(struct CUPModule) == (9 * sizeof(size_t)),
+static_assert(sizeof(struct CUPModule) == (4 * sizeof(size_t)),
               "CUPModule size must be 4 bytes");
 
-void emit_error(CUPModule *buf, size_t nbytes);
-void emit      (CUPModule *buf, const void *value, size_t size);
+CUP_API void emit_error(CUPModule *buf, size_t nbytes);
+CUP_API void emit      (CUPModule *buf, const void *value, size_t size);
 
 #define emit8(buf, v)  do { uint8_t  _v = (v); emit((buf), &_v, 1); } while (0)
 #define emit16(buf, v) do { uint16_t _v = (v); emit((buf), &_v, 2); } while (0)
@@ -233,8 +240,11 @@ void emit      (CUPModule *buf, const void *value, size_t size);
 
 #define emiti32(buf, v) do { int32_t _v = (v); emit((buf), &_v, 4); } while (0)
 
-void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count);
+CUP_API void codegen_func(CUPState* state, CUPModule* buf, CReallocs* reallocs, NRange* range, size_t *value, size_t arg_count);
 
-void externalSymbol(CUPState* state, size_t name_idx, size_t sig_idx);
+CUP_API void externalSymbol(CUPState* state, size_t name_idx, size_t sig_idx);
+
+/** @brief Write an ELF64 relocatable object file. */
+CUP_API int cup_output_object(CUPState *state, CReallocs* reallocs, const char *filename);
 
 #endif

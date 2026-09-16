@@ -28,9 +28,9 @@ static const char *find_var_name(CUPState *state, CVariable *target) {
 }
 
 /* Is `var` one of this module's own @-defined functions? Give its .text offset. */
-static int find_internal_offset(CUPModule *m, CVariable *var, size_t *out_offset) {
-  CRealloc *r = (CRealloc *)m->reallocs.data;
-  size_t n = m->reallocs.size / sizeof(CRealloc);
+static int find_internal_offset(CReallocs* reallocs, CVariable *var, size_t *out_offset) {
+  CRealloc *r = reallocs->data;
+  size_t n = reallocs->size / sizeof(CRealloc);
   for (size_t i = 0; i < n; i++) {
     if (r[i].var == &var->value) {
       *out_offset = r[i].ptr;
@@ -48,7 +48,7 @@ static size_t sec_index(lielf_binary_t *bin, const char *name) {
 }
 
 #ifndef _WIN32
-int cup_output_object(CUPState *state, const char *filename) {
+int cup_output_object(CUPState *state, CReallocs* reallocs, const char *filename) {
   if (state == NULL || filename == NULL) {
     cup_error("cup_output_object: state or filename is NULL");
     return -1;
@@ -91,6 +91,7 @@ int cup_output_object(CUPState *state, const char *filename) {
     rodata_idx = sec_index(bin, ".rodata");
   }
 
+#if 0
   size_t nrefs = m->objrefs.size / sizeof(CObjRef);
   CObjRef *refs = (CObjRef *)m->objrefs.data;
 
@@ -154,7 +155,7 @@ int cup_output_object(CUPState *state, const char *filename) {
 
     size_t fn_off;
     lielf_symbol_t *target;
-    if (r->var && find_internal_offset(m, r->var, &fn_off)) {
+    if (r->var && find_internal_offset(m, reallocs, r->var, &fn_off)) {
       const char *vname = find_var_name(state, r->var);
       if (vname) snprintf(nm, sizeof(nm), "%s", vname);
       else snprintf(nm, sizeof(nm), "__cup_fn_%zu", fn_off);
@@ -184,6 +185,7 @@ int cup_output_object(CUPState *state, const char *filename) {
     }
   }
 
+#endif
   int rc = lielf_write(bin, filename);
   lielf_free(bin);
   if (rc != 0) {

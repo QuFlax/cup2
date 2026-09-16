@@ -457,6 +457,7 @@ static inline Node* getNode(NRange *cc) {
 
 size_t codegen_expr(CUPState* state, CUPModule *buf,
   X64Reg treg, X64Reg sreg,
+  CReallocs* reallocs,
   NRange* range, CReallocs* returns, CVariable **rvalue) {
   assert(buf != NULL);
   CTType ntype = getNode(range)->token;
@@ -471,12 +472,12 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       // Was unscaled (base + raw index, byte addressing) — every array
       // this file builds (see N_ARRAY below) stores size_t-sized
       // (8-byte) elements, so index i must land at base + i*8.
-      if (codegen_expr(state, buf, treg, sreg, range, returns, NULL)) {
+      if (codegen_expr(state, buf, treg, sreg, reallocs, range, returns, NULL)) {
         cup_error("N_OP 1 codegen left is multiple values");
         exit(1);
       }
       X64Reg temp_reg = reg_pick(treg, sreg);
-      size_t i = codegen_expr(state, buf, temp_reg, temp_reg, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, temp_reg, temp_reg, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_OP 2 codegen right is multiple values");
         exit(1);
@@ -494,15 +495,15 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       size_t value = getNode(range)->value;
       size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, value));
       CObjRef ref = {off, 1, NULL, value};
-      vector_pushT(buf->objrefs.vec, ref);
-      size_t count = codegen_expr(state, buf, treg, sreg, range, returns, NULL);
-      printf("N_ARRAY count = %ld\n", count);
+      //vector_pushT(buf->objrefs.vec, ref);
+      size_t count = codegen_expr(state, buf, treg, sreg, reallocs, range, returns, NULL);
+      cup_dbgf("N_ARRAY count = %ld", count);
       for (size_t i = 0; i < count; i++) {
         emit_push_reg(buf, treg);
         emit_add_reg_imm(buf, treg, i * sizeof(size_t));
         X64Reg temp_reg = RAX;
         //X64Reg temp_reg = reg_pick(treg, sreg);
-        if (codegen_expr(state, buf, temp_reg, temp_reg, range, returns, NULL)) {
+        if (codegen_expr(state, buf, temp_reg, temp_reg, reallocs, range, returns, NULL)) {
           cup_error("N_ARRAY ARG");
           exit(1);
         }
@@ -520,7 +521,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       size_t idx = getNode(range)->value;
       size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, idx));
       CObjRef ref = {off, 1, NULL, idx};
-      vector_pushT(buf->objrefs.vec, ref);
+      //vector_pushT(buf->objrefs.vec, ref);
       return 0;
     }
     case N_VARIABLE: {
@@ -537,7 +538,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       {
         size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
         CObjRef ref = {off, 0, var, 0};
-        vector_pushT(buf->objrefs.vec, ref);
+        //vector_pushT(buf->objrefs.vec, ref);
       }
       if (sreg != ANY) {
         emit_mov_reg_deref(buf, treg, sreg);
@@ -545,7 +546,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       return 0;
     }
     case T_ADDEQ: {
-      size_t i = codegen_expr(state, buf, RBX, ANY, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, RBX, ANY, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_ADDEQ lhs");
         exit(1);
@@ -553,7 +554,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit_push_reg(buf, RBX);
       emit_mov_reg_deref(buf, RAX, RBX);
       emit_push_reg(buf, RAX);
-      i = codegen_expr(state, buf, RAX, RAX, range, returns, NULL);
+      i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_ADDEQ rhs");
         exit(1);
@@ -567,7 +568,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       break;
     }
     case T_EQ: {
-      size_t i = codegen_expr(state, buf, RBX, RBX, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, RBX, RBX, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -576,7 +577,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         emit_push_reg(buf, RAX);
         emit_push_reg(buf, treg);
       }
-      i = codegen_expr(state, buf, RAX, ANY, range, returns, NULL);
+      i = codegen_expr(state, buf, RAX, ANY, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_ASSIGN 1");
         exit(1);
@@ -595,7 +596,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case T_LESSEQ: {
       X64Reg temp_reg = R10;
       //printf("add1 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      size_t i = codegen_expr(state, buf, treg, sreg, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, treg, sreg, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_OP 1 codegen left is multiple values");
         exit(1);
@@ -610,7 +611,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit_push_reg(buf, temp_reg);
       //emit_push_reg(buf, treg);
       //printf("add2 treg = %s, sreg = %s\n", X64Reg_names[treg], X64Reg_names[sreg]);
-      i = codegen_expr(state, buf, temp_reg, temp_reg, range, returns, NULL);
+      i = codegen_expr(state, buf, temp_reg, temp_reg, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_OP 2 codegen right is multiple values");
         exit(1);
@@ -629,11 +630,12 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
 
       // const CUPType *type = defType(state, buf->it, NULL);
       CVariable* var = NULL;
-      size_t i = codegen_expr(state, buf, RAX, RAX, range, returns, &var);
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, &var);
       if (i) {
         cup_error("N_CALL 1");
         exit(1);
       }
+#if 0
       const CUPType *fn_type = var != NULL ? var->type : NULL;
       if (var == NULL || fn_type == NULL) {
         cup_error("T_CALL: missing function variable");
@@ -649,8 +651,9 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         cup_errorf("T_CALL: not Function or Generator get %s", tname);
         exit(1);
       }
+#endif
       emit_push_reg(buf, RAX);
-      size_t count = codegen_expr(state, buf, RAX, RAX, range, returns, NULL);
+      size_t count = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
 #if CCHECK
       const CUPType *type = state->nodes.node.variable->type;
       if (type->realtype != CUP_TYPE_GENERATOR) {
@@ -670,9 +673,9 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       } else
         count = codegen_expr(state, buf, RAX, RAX);
 #endif
-      printf("T_CALL count = %ld\n", count);
+      cup_dbgf("T_CALL count = %ld", count);
       for (size_t i = 0; i < count; i++) {
-        if (codegen_expr(state, buf, RAX, RAX, range, returns, NULL)) {
+        if (codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL)) {
             cup_error("N_CALL ARG");
             exit(1);
         }
@@ -692,7 +695,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case T_AT: {
       size_t size = buf->size;
       CVariable* var = NULL;
-      size_t i = codegen_expr(state, buf, RAX, RAX, range, returns, &var);
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, &var);
       if (i) {
         cup_error("N_FUNCTION 1");
         exit(1);
@@ -708,14 +711,14 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       state->scope++;
       size_t arg_count = 0;
       while (var->type->elements[arg_count + 1] != &cup_type_void) arg_count++;
-      if (arg_count == 0 && arg_count != codegen_expr(state, buf, RAX, ANY, range, returns, NULL))
+      if (arg_count == 0 && arg_count != codegen_expr(state, buf, RAX, ANY, reallocs, range, returns, NULL))
           exit(17);
       buf->size = size;
-      codegen_func(state, buf, range, &var->value, arg_count);
+      codegen_func(state, buf, reallocs, range, &var->value, arg_count);
       return 0;
     }
     case T_IF: {
-      size_t i = codegen_expr(state, buf, RAX, RAX, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_IF 1");
         exit(1);
@@ -724,7 +727,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       size_t patch = emit_je_rel32(buf, 0);
       size_t count = 1;
       for (size_t j = 0; j < count; j++) {
-        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, returns, NULL);
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, reallocs, range, returns, NULL);
         if (i)
           count += i;
       }
@@ -741,7 +744,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     }
     case T_WHILE: {
       size_t condition_target = buf->size;
-      size_t i = codegen_expr(state, buf, RAX, RAX, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
       if (i) {
         cup_error("T_WHILE 1");
         exit(1);
@@ -750,7 +753,7 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       size_t if_patch = emit_je_rel32(buf, 0);
       size_t count = 1;
       for (size_t j = 0; j < count; j++) {
-        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, returns, NULL);
+        size_t i = codegen_expr(state, buf, RETURN_REG, ANY, reallocs, range, returns, NULL);
         if (i)
           count += i;
       }
@@ -759,13 +762,13 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       return 0;
     }
     case T_RETURN: {
-      size_t i = codegen_expr(state, buf, RAX, RAX, range, returns, NULL);
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
       if (i) {
         cup_error("N_RETURN 1");
         exit(i);
       }
       CRealloc r = { NULL, emit_jmp_rel32(buf, 0) };
-      printf("RRRRR - %ld : %ld\n", state->nodes.value, r.ptr);
+      cup_dbgf("RRRRR - %ld : %ld", state->nodes.value, r.ptr);
       vector_pushT(returns->vec, r);
       return i;
     }
@@ -878,12 +881,12 @@ void bufmove512(CUPModule* buf, size_t start, size_t length) {
 }
 */
 
-void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value, size_t arg_count) {
+void codegen_func(CUPState* state, CUPModule* buf, CReallocs* reallocs, NRange* range, size_t *value, size_t arg_count) {
   state->nodes.value = buf->size;
   size_t save = buf->size;
   CRealloc rel = {value, 0};
-  vector_pushT(buf->reallocs.vec, rel);
-  printf("\n--- %ld %ld %ld ---\n", save, buf->size, buf->reallocs.size / sizeof(CRealloc));
+  vector_pushT(reallocs->vec, rel);
+  cup_dbgf("--- %ld %ld %ld ---", save, buf->size, reallocs->size / sizeof(CRealloc));
 
   emit_push_reg(buf, RBP);
   emit_mov_reg_reg(buf, RBP, RSP);
@@ -892,24 +895,24 @@ void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value,
   CReallocs returns = {};
 
   if (arg_count) {
-    if (arg_count != codegen_expr(state, buf, RAX, ANY, range, &returns, NULL)) {
+    if (arg_count != codegen_expr(state, buf, RAX, ANY, reallocs, range, &returns, NULL)) {
       exit(17);
     }
     for (size_t j = 0; j < arg_count; j++) {
-      codegen_expr(state, buf, RAX, ANY, range, &returns, NULL);
+      codegen_expr(state, buf, RAX, ANY, reallocs, range, &returns, NULL);
       emit_mov_deref_reg(buf, sysv_arg_regs[j], RAX);
     }
   }
   size_t count = 1;
   for (size_t j = 0; j < count; j++) {
-    size_t i = codegen_expr(state, buf, RETURN_REG, ANY, range, &returns, NULL);
+    size_t i = codegen_expr(state, buf, RETURN_REG, ANY, reallocs, range, &returns, NULL);
     if (i)
       count += i;
   }
 
   for (size_t i = returns.size / sizeof(CRealloc); i-- > 0;) {
     patch_rel(buf, returns.data[i].ptr, buf->size);
-    printf("VVVVV - %ld : %ld & %i : %ld\n", state->nodes.value, buf->size,
+    cup_dbgf("VVVVV - %ld : %ld & %i : %ld", state->nodes.value, buf->size,
       *(int32_t*)(buf->data + returns.data[i].ptr), returns.data[i].ptr);
   }
   if (returns.data) cup_free(returns.data);
@@ -917,16 +920,16 @@ void codegen_func(CUPState* state, CUPModule* buf, NRange* range, size_t *value,
   emit_mov_reg_reg(buf, RSP, RBP);
   emit_pop_reg(buf, RBP);
   emit_ret(buf);
-  printf("---------\n");
+  cup_dbg("---------");
 
   if (save == 0)
     return;
   size_t n = buf->size - save;
   bufmove_dynamic(buf, save, n);
-  size_t rcount = buf->reallocs.size / sizeof(CRealloc);
-  printf("\n--- %ld %ld %ld %ld ---\n", n, save, buf->size, rcount);
+  size_t rcount = reallocs->size / sizeof(CRealloc);
+  cup_dbgf("--- %ld %ld %ld %ld ---", n, save, buf->size, rcount);
   rcount--;
   for (size_t j = 0; j < rcount; j++) {
-    buf->reallocs.data[j].ptr += n;
+    reallocs->data[j].ptr += n;
   }
 }

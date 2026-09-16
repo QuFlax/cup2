@@ -5,7 +5,7 @@
             "name": "Run CUP Compiler",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/cup",
+            "program": "${workspaceFolder}/build/linux/cup",
             "args": ["-i", "-b", "test.txt"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -17,7 +17,7 @@
             "name": "Debug CUP Compiler",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/cup",
+            "program": "${workspaceFolder}/build/linux/cup",
             "args": ["-b", "test.b", "-i", "test.i", "test.txt"],
             "cwd": "${workspaceFolder}",
             "sourceMap": {
@@ -31,7 +31,7 @@
             "name": "Debug Parser Only",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/cup",
+            "program": "${workspaceFolder}/build/linux/cup",
             "args": ["--parse-only", "test.txt"],
             "cwd": "${workspaceFolder}"
         },

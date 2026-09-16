@@ -13,7 +13,7 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "problemMatcher": ["$gcc"]
+      "problemMatcher": []
     },
     {
       "label": "clean",

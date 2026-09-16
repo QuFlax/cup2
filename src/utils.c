@@ -4,7 +4,8 @@
  */
 
 #include "cup.h"
-#include <threads.h>
+//#include <threads.h>
+#include "platform.h"
 
 #define INITIAL_CAPACITY (sizeof(size_t) * 4)
 
@@ -119,26 +120,6 @@ size_t cup_tpos() {
   return temppos;
 }
 
-
-void emit_error(CUPModule *buf, size_t size) {
-  if (buf == NULL) return;
-  size_t capacity = PAGESIZE;
-  if (buf->data == NULL)
-    buf->data = (uint8_t *)cup_malloc(capacity);
-  buf->size += size;
-  if (buf->size <= capacity) return;
-  do {
-    capacity += PAGESIZE;
-  } while (buf->size > capacity);
-  buf->data = (uint8_t *)cup_realloc(buf->data, capacity);
-}
-void emit(CUPModule *buf, const void *value, size_t size) {
-  if (buf == NULL) return;
-  size_t offset = buf->size;
-  emit_error(buf, size);
-  memcpy(buf->data + offset, value, size);
-}
-
 /* ========================================================================== */
 /*                           DYNAMIC VECTORS                                  */
 /* ========================================================================== */
@@ -150,6 +131,11 @@ static void vector_resize(CVector *vec, size_t needed) {
   while (cap < needed) cap *= 2;
   vec->data     = cup_realloc(vec->data, cap);
   vec->capacity = cap;
+}
+
+void vector_new(CVector *vec, size_t sizeT) {
+  assert(vec && sizeT > 0 && vec->size == 0);
+  vector_resize(vec, sizeT);
 }
 
 void vector_pop(CVector *vec, size_t sizeT) {

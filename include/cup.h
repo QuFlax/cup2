@@ -17,25 +17,6 @@
 #define TEMP_CAP 2048
 
 /* ========================================================================== */
-/*                           DEBUG LOGGING                                    */
-/* ========================================================================== */
-
-#ifdef CUP_DEBUG
-#  define cup_dbgf(f, ...) \
-    do { \
-        const char *_msg = cup_sprintf((f), __VA_ARGS__); \
-        cup_log(CUP_Level_INFO, _msg); \
-        cup_free(_msg); \
-    } while (0)
-#  define cup_dbg(msg) cup_log(CUP_Level_INFO, (msg))
-#else
-#  define cup_dbgf(f, ...) ((void)0)
-#  define cup_dbg(msg)     ((void)0)
-#endif
-
-
-
-/* ========================================================================== */
 /*                           SYMBOL HASH MAP                                  */
 /* ========================================================================== */
 
@@ -170,10 +151,10 @@ typedef struct CUPModuleList {
 /*                           COMPILER STATE                                   */
 /* ========================================================================== */
 
-struct CUPGenContext {
-    CUPState* state;
-    Node node[3];
-};
+//struct CUPGenContext {
+//    CUPState* state;
+//    Node node[3];
+//};
 
 struct CUPState {
     /* Source input */
@@ -246,10 +227,9 @@ typedef struct CVariable {
 //CVariable* getVar(CUPState *state, size_t name);
 CVariable *getVars(CUPState *state, size_t name, size_t maxscope);
 void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope);
-void putVar2(CUPState *state, size_t name, CVariable var);
 
-const CUPType    *cup_type_get(CUPState *state, const CUPType type);
-const CUPType    *cup_type_put(CUPState *state, const CUPType type);
+//const CUPType    *cup_type_get(CUPState *state, const CUPType type);
+//const CUPType    *cup_type(CUPState *state, const CUPType type);
 const CUPType    *cup_type_parse(CUPState* state, const char* sig);
 
 size_t scope_enter(CUPState *state);

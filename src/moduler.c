@@ -1,5 +1,6 @@
 #include "../include/cup.h"
 // #include <threads.h>
+#include "dlfcn.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -31,13 +32,61 @@ int samefile(const char *a, const char *b) {
   return 0;
 }
 
+void emit_error(CUPModule *buf, size_t size) {
+  if (buf == NULL) return;
+  if (buf->data == NULL) {
+    buf->vec.capacity = PAGESIZE;
+    buf->data = VirtualAlloc(NULL, size,
+      MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!buf->data) {
+      DWORD err = GetLastError();
+      char msg[512];
+      FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM
+        | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, err, 0, msg, sizeof(msg), NULL
+      );
+      fprintf(stderr, "mmap failed: %s", msg);
+      exit(1);
+    }
+  }
+  buf->size += size;
+  if (buf->size <= buf->vec.capacity) return;
+  size_t oldcap = buf->vec.capacity;
+  do {
+    buf->vec.capacity += PAGESIZE;
+  } while (buf->size > buf->vec.capacity);
+  
+  void* old = buf->data;
+  buf->data = VirtualAlloc(NULL, buf->vec.capacity,
+    MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+  if (!buf->data) {
+    DWORD err = GetLastError();
+    char msg[512];
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM
+      | FORMAT_MESSAGE_IGNORE_INSERTS,
+      NULL, err, 0, msg, sizeof(msg), NULL
+    );
+    fprintf(stderr, "mmap failed: %s", msg);
+    exit(1);
+  }
+  memcpy(buf->data, old, oldcap);
+  VirtualFree(old, 0, MEM_RELEASE);
+}
+void emit(CUPModule *buf, const void *value, size_t size) {
+  if (buf == NULL) return;
+  size_t offset = buf->size;
+  emit_error(buf, size);
+  memcpy(buf->data + offset, value, size);
+}
+
 #else
 #include <dlfcn.h>
 #include <unistd.h>
 
 #include <linux/limits.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
+#define __USE_GNU
+#include <sys/mman.h>
 
 const char *get_exe_path(void) {
   static char path[PATH_MAX];
@@ -63,6 +112,33 @@ int samefile(const char *a, const char *b) {
   if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
     return 0;
   return (sa.st_ino == sb.st_ino) && (sa.st_dev == sb.st_dev);
+}
+
+void emit_error(CUPModule *buf, size_t size) {
+  if (buf == NULL) return;
+  if (buf->data == NULL) {
+    buf->vec.capacity = PAGESIZE;
+    buf->data = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (buf->data == MAP_FAILED) {
+      perror("mmap failed");
+      exit(1);
+    }
+  }
+  buf->size += size;
+  if (buf->size <= buf->vec.capacity) return;
+  size_t oldcap = buf->vec.capacity;
+  do {
+    buf->vec.capacity += PAGESIZE;
+  } while (buf->size > buf->vec.capacity);
+  
+  buf->data = mremap(buf->data, oldcap, buf->vec.capacity, MREMAP_MAYMOVE);
+}
+void emit(CUPModule *buf, const void *value, size_t size) {
+  if (buf == NULL) return;
+  size_t offset = buf->size;
+  emit_error(buf, size);
+  memcpy(buf->data + offset, value, size);
 }
 
 #endif
@@ -148,7 +224,7 @@ void printInstructions(FILE *out, CUPModule *m) {
   // fprintf(out, "-- module: %zu bytes --\n", m->size);
   for (size_t i = 0; i < m->size; i++)
   {
-    fprintf(out, "%02X ", m->data[i]);
+    fprintf(out, "%02X ", ((uint8_t*)m->data)[i]);
     if ((i + 1) % 16 == 0)
       fprintf(out, "\n");
   }
@@ -160,7 +236,48 @@ void printInstructions(FILE *out, CUPModule *m) {
 static void symbol_cb(void *ctx, const char *name, const CUPType *type, size_t value, size_t scope) {
   char tname[256];
   cup_type_snname(tname, sizeof(tname), type);
-  fprintf((FILE*)ctx, "%s[%ld], type= %s, value= %ld\n", name, scope, tname, value);
+  fprintf((FILE*)ctx, "%s[%zu], type= %s, value= %zu\n", name, scope, tname, value);
+}
+
+static void cup_write_bytecode_f(CUPState *state, const NRange range, FILE* f) {
+  fputs("//vars\n", f);
+  cup_list_symbols(state, f, symbol_cb);
+  fputs("//data\n", f);
+  
+  for (size_t i = 0; i < state->data_size; i++)
+    fputc(*getData(state, i), f);
+    //fprintf(f, "%hhx", *getData(state, i));
+  fputs("\n//ast\n", f);
+  //printNodes(f, range, state);
+  for (Node *it = range.it; it != range.end; it++) {
+    const char* name = token_names[it->token];
+    fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
+    if (it->token == N_BLOCK || it->token == T_NUMBER || it->token == T_COMMA) {
+      it++;
+      fprintf(f, " - %zu\n", it->value);
+    }
+    else if (it->token == T_IDENTIFIER) {
+      it++;
+      fprintf(f, " - %s\n", getString(state, it->value));
+    }
+    else if (it->token == T_EQ || it->token == T_CALL
+      || it->token == T_OSB || it->token == T_AT
+      || it->token == T_RETURN) {
+      fputc('\n', f);
+    }
+    else if (it->token == N_ARRAY) {
+      it++;
+      fprintf(f, " - data offset: %zu\n", it->value);
+    }
+    else if (it->token == T_STRING || it->token == T_MSTRING) {
+      it++;
+      fprintf(f, " - data offset: %zu\n", it->value);
+      //fprintf(f, " - \"%s\"\n", getData(state, (++it)->value));
+    }
+    else
+      fprintf(f, "%s[%hu:%hu] as value = %zu\n", name, it->loc.col, it->loc.line, it->value);
+  }
+  fclose(f);
 }
 
 static void cup_write_bytecode(CUPState *state, const NRange range) {
@@ -173,59 +290,24 @@ static void cup_write_bytecode(CUPState *state, const NRange range) {
     cup_errorf("Could not open bytecode output '%s'", filename);
     return;
   }
-  fputs("//vars\n", f);
-  cup_list_symbols(state, f, symbol_cb);
-  fputs("//data\n", f);
-  
-  for (size_t i = 0; i < state->data_size; i++)
-    fputc(*getData(state, i), f);
-    //fprintf(f, "%hhx", *getData(state, i));
-  fputs("\n//ast\n", f);
-  //printNodes(f, range, state);
-  for (Node *it = range.it; it != range.end; it++) {
-    const char* name = token_names[it->token];
-    if (it->token == N_BLOCK || it->token == T_NUMBER || it->token == T_COMMA) {
-      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
-      fprintf(f, " - %ld\n", (++it)->value);
-    }
-    else if (it->token == T_IDENTIFIER) {
-      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
-      fprintf(f, " - %s\n", getString(state, (++it)->value));
-    }
-    else if (it->token == T_EQ || it->token == T_CALL || it->token == T_OSB)
-      fprintf(f, "%s[%hu:%hu]\n", name, it->loc.col, it->loc.line);
-    else if (it->token == N_ARRAY) {
-      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
-      fprintf(f, " - data offset: %ld\n", (++it)->value);
-    }
-    else if (it->token == T_STRING || it->token == T_MSTRING) {
-      fprintf(f, "%s[%hu:%hu]", name, it->loc.col, it->loc.line);
-      fprintf(f, " - data offset: %ld\n", (++it)->value);
-      //fprintf(f, " - \"%s\"\n", getData(state, (++it)->value));
-    }
-    else
-      fprintf(f, "%s[%hu:%hu] as value = %ld\n", name, it->loc.col, it->loc.line, it->value);
-  }
-  fclose(f);
+  cup_write_bytecode_f(state, range, f);
   state->bytecode_path = NULL;
 }
 
 void codegen(CUPState *state, CUPModule *m, Nodes nodes, size_t* init) {
   NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
-  codegen_func(state, m, &range, init, 0);
-  void *page = allocMemory(m->size);
-  memcpy(page, m->data, m->size);
-  cup_free(m->data);
-  m->data = page;
-  CRealloc *rptr = m->reallocs.data;
-  for (size_t i = m->reallocs.size / sizeof(CRealloc); i--;)
+  CReallocs reallocs = {};
+  codegen_func(state, m, &reallocs, &range, init, 0);
+  void *page = m->data;
+  CRealloc *rptr = reallocs.data;
+  for (size_t i = reallocs.size / sizeof(CRealloc); i--;)
   {
     CRealloc rr = rptr[i];
-    printf("[%ld] %ld %p ", i, rr.ptr, rr.var);
+    cup_dbgf("[%ld] %ld %p ", i, rr.ptr, rr.var);
     if (rr.var) {
       *rr.var = (size_t)(page + rr.ptr);
-      printf("before = %hhx", *(uint8_t*)*rr.var);
-      printf("after = %zx\n", *rr.var);
+      //cup_dbgf("before = %hhx", *(uint8_t*)*rr.var);
+      //cup_dbgf("after = %zx", *rr.var);
     }
     // if (m->data[rr.ptr] == 0x55) {
     // printf("BR: %ld\n", *rr.var);
@@ -244,7 +326,7 @@ void codegen(CUPState *state, CUPModule *m, Nodes nodes, size_t* init) {
   // return;
   // printf("init = %zx\n", init);
 
-  // symmap_iter(&state->symmap, state, printVar);
+  //symmap_iter(&state->symmap, state, printVar);
 }
 
 CUPModule *parse(CUPState *state, const char *buf, const char *file) {
@@ -266,6 +348,7 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
   state->nodes = (Node2){};
   state->nodes.node.loc = (Loc){N_BLOCK, 1, 1};
 
+  //puts("Nodes");
   Nodes nodes = {};
   vector_pushT(nodes.vec, state->nodes);
 
@@ -277,20 +360,45 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
     push_vector(&nodes.vec, n.vec);
   }
 
+  //puts("Nodes2");
+
   state->scope = 0;
   size_t init = 0;
   codegen(state, &m->module, nodes, &init);
-  printf("page = %p, init = %p\n", m->module.data, (void *)init);
+  cup_dbgf("page = %p, init = %p", m->module.data, (void *)init);
+#if 0
   NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
   if (state->bytecode_path)
     cup_write_bytecode(state, range); // NO -O
-  int def = resolve(state, &nodes);
-  cup_free(nodes.data);
-#if 0 // def
-  typedef void *(*JitFunc)();
-  void *r = ((JitFunc)init)();
-  printf("r = %p\n", r);
 #endif
+
+  //puts("Nodes3");
+  state->scope = 0;
+  int def = resolve(state, &nodes);
+  if (def == 0) {
+    state->scope = 0;
+    m->module.size = 0;
+    codegen(state, &m->module, nodes, &init);
+    cup_dbgf("page = %p, init = %p\n", m->module.data, (void *)init);
+    //puts("Nodes3.5");
+    typedef void *(*JitFunc)();
+    void *r = ((JitFunc)init)();
+    cup_dbgf("r = %p\n", r);
+  } else {
+    cup_dbgf("def = 0, page = %p, init = %p", m->module.data, (void *)init);
+  }
+  //puts("Nodes4");
+
+
+#if 1
+  NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+  if (state->bytecode_path)
+    cup_write_bytecode(state, range); // NO -O
+#elif 0
+  NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
+  cup_write_bytecode_f(state, range, stdout); // NO -O
+#endif
+  cup_free(nodes.data);
 
   state->priv_stream = priv_stream;
   state->input_stream = input_stream;
@@ -351,9 +459,9 @@ void cup_delete(CUPState *state) {
       munmap(m->module.data, m->module.size);
 #endif
     cup_free((void *)m->module.path);
-    cup_free(m->module.reallocs.data);
+    //cup_free(m->module.reallocs.data);
     //cup_free(m->module.range.it);
-    cup_free(m->module.objrefs.data);
+    //cup_free(m->module.objrefs.data);
     cup_free(m);
     m = next;
   }
@@ -405,7 +513,7 @@ CUPModule *cup_compile_file(CUPState *state, const char *filename) {
   cup_free(buf);
   return m;
 }
-int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType type) {
+int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType* type) {
   if (state == NULL || name == NULL || *name == '\0')
   {
     cup_error("Cannot add symbol(%s) because state == NULL || name == NULL");
@@ -424,11 +532,11 @@ int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType t
     cup_errorf("Cannot add symbol(%s) because it already exist", name);
     return -3;
   }
-  const CUPType *t = cup_type_put(state, type);
+  //const CUPType *t = cup_type(state, type);
   // symmap_put(&state->symmap, state->nodes.value, t, (size_t)val, 0);
   //CVARS vars = {.vars = {{t, (size_t)val, 1}}};
   //map_put(&state->symmap, state->nodes.value, &vars, sizeof(CVARS), SIZE_MAX);
-  putVar(state, state->nodes.value, t, (size_t)val, 1);
+  putVar(state, state->nodes.value, type, (size_t)val, 1);
   return 0;
 }
 CVariable *cup_get_symbol(CUPState *state, const char *name) {

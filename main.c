@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "include/sodump.h"
+//#include "include/sodump.h"
 
 #include <stdarg.h>
 
@@ -25,15 +25,9 @@ static void printUsage() {
        "-i, --instructions <file>\tDump codegen'd machine code to <file>\n");
 }
 
-static size_t l = 0;
-size_t get_size(size_t v) {
-  printf("get_size: %ld\n", v);
-  return l;
-}
-
-size_t myprint(size_t v) { printf("%ld\n", v); return v + 1; }
+size_t myprint(size_t v) { printf("%zu\n", v); return v + 1; }
 size_t myprint2(size_t v, size_t (*cb)(size_t v)) {
-  printf("%ld 2+2\n", v);
+  printf("%zu 2+2\n", v);
   return cb(v + 1);
 }
 void myprint3(char* str) {
@@ -53,28 +47,61 @@ void pp(size_t i, ...) {
 }
 
 void* r(void *ptr, size_t size) {
-  //printf("REALLOC: %p, size = %ld\n", ptr, size);
+  //static size_t count = 0;
+#if 1
   if (size != 0) {
     void *p = realloc(ptr, size);
-    if (p)
+    //if (ptr == NULL) count++;
+    //printf("%c|- %zu / %zu\n", (ptr == NULL) ? 'A' : 'R', size, count);
+    if (p) {
       return p;
+    }
     cup_log(CUP_Level_ERRO, "memory full for reallocator");
     exit(1);
   }
+  //count--;
+  //printf("F|- %zu\n", count);
   free(ptr);
   return NULL;
+#else
+  static char mem[16384 * 2] = {};
+  static size_t index = 0;
+  static char memc[100 * sizeof(struct MBlock)] = {};
+  static CVector mv = {memc, 0, sizeof(memc)};
+  if (size != 0) {
+    if (1) {
+      all += size;
+      char* p = mem + index;
+      if (ptr) {
+        memcpy(p, ptr, 0);
+      }
+      struct MBlock bl = { p, size };
+      vector_push(&mv, &bl, sizeof(bl));
+      printf("%c | %p = %zu / %zu\n", (ptr == NULL) ? 'A' : 'R', p, size, all);
+      index += size;
+      return (void*)p;
+    }
+  }
+  for (size_t i = 0; i < mv.size; i += sizeof(struct MBlock)) {
+    struct MBlock* fg = (struct MBlock*)((char*)mv.data + i);
+    if (fg->ptr != ptr) continue;
+    all -= fg->size;
+    printf("F | %p = %zu / %zu\n", fg, fg->size, all);
+    struct MBlock bl = {};
+    memcpy(&bl, (char*)mv.data + mv.size - sizeof(bl), sizeof(bl));
+    memcpy((char*)mv.data + mv.size - sizeof(bl), fg, sizeof(bl));
+    memcpy(fg, &bl, sizeof(bl));
+    vector_pop(&mv, sizeof(bl));
+    return NULL;
+  }
+  return NULL;
+#endif
 }
 
-size_t size4() {
-  return 4;
-}
-size_t size8() {
-  return 8;
-}
 #if CUPE
 CUP_GEN_RESULT get_size_wrapper(CUPGenContext *ctx, const CUPType **types, size_t **values, size_t max) {
   (void)values;
-  printf("max = %ld -------\n", max);
+  //printf("max = %ld -------\n", max);
   if (max != 1) {
     cup_error("get_size_wrapper: argc is incorrect");
     return CUP_GEN_ERROR;
@@ -83,13 +110,10 @@ CUP_GEN_RESULT get_size_wrapper(CUPGenContext *ctx, const CUPType **types, size_
     cup_error("get_size_wrapper: types[0] is NULL");
     return CUP_GEN_ERROR;
   }
-  char tname[256];
-  cup_type_snname(tname, sizeof(tname), types[0]);
-  printf("type = %s\n", tname);
   if (types[0]->type == CUP_TYPE_INT) {
-    cup_gen_value(ctx, &cup_type_int, (void*)sizeof(size_t));
+    cup_gen_value(ctx, (void*)sizeof(size_t), &cup_type_int);
   } else {
-    assert(0);
+    cup_gen_value(ctx, (void*)0, &cup_type_int);
   }
   return CUP_GEN_DONE;
 }
@@ -98,7 +122,7 @@ CUP_GEN_RESULT printf_wrapper(CUPGenContext *ctx, const CUPType **argtypes, size
   const char* format = NULL;
   if (max > 0) {
     if (argvalues[0] == NULL) {
-      printf("args.value == NULL: %ld\n", max);
+      printf("args.value == NULL: %zu\n", max);
       return CUP_GEN_ERROR;
     }
     if (argtypes[0]->type != CUP_TYPE_ARRAY || argtypes[0]->elements[0]->type != CUP_TYPE_UINT8) {
@@ -124,9 +148,7 @@ CUP_GEN_RESULT printf_wrapper(CUPGenContext *ctx, const CUPType **argtypes, size
   DTypes[0] = &cup_type_void;
   memcpy((char*)DTypes + sizeof(void*), argtypes, max * sizeof(void*));
   DTypes[max + 1] = &cup_type_void;
-  CUPType fn_t = (CUPType){ sizeof(void *), CUP_TYPE_FUNCTION, (uint16_t)sizeof(void *), DTypes };
-  //cup_gen_call(ctx, cup_type_puts(ctx, fn_t), cup_gen_get_value(ctx));
-  cup_gen_call(ctx, cup_type_puts(ctx, fn_t), (void*)printf);
+  cup_gen_call(ctx, (void*)printf, cup_type(ctx->state, CUP_TYPE_FUNCTION, max, DTypes));
   return CUP_GEN_DONE;
 }
 #endif
@@ -135,7 +157,7 @@ void symbol_cb(void *ctx, const char *name, const CUPType *type, size_t value, s
   (void)ctx;
   char tname[256];
   cup_type_snname(tname, sizeof(tname), type);
-  printf("%s[%ld], type= %s, value= %ld\n", name, scope, tname, value);
+  printf("%s[%zu], type= %s, value= %zu\n", name, scope, tname, value);
 }
 
 int main(int argc, char **argv) {
@@ -150,23 +172,23 @@ int main(int argc, char **argv) {
     return 1;
   }
   {
-    const CUPType ft = cup_type_function(&cup_type_int, &cup_type_int);
-    const CUPType ft2 = cup_type_function(&cup_type_int, &cup_type_int, &ft);
-    const CUPType ft3_p = cup_type_pointer(&cup_type_uint8);
-    const CUPType ft3 = cup_type_function(&cup_type_void, &ft3_p);
+    const CUPType* ft = cup_typef(state, 2, &cup_type_int, &cup_type_int);
+    const CUPType* ft2 = cup_typef(state, 3, &cup_type_int, &cup_type_int, ft);
+    const CUPType* ft3_p = cup_typef(state, 1, &cup_type_uint8);
+    const CUPType* ft3 = cup_typef(state, 2, &cup_type_void, ft3_p);
 #if CUPE
-    const CUPTypeExt gent = cup_type_generator(printf_wrapper);
-    const CUPTypeExt gent2 = cup_type_generator(get_size_wrapper);
-    cup_add_symbol(state, "printf", NULL, gent.cuptype);
-    cup_add_symbol(state, "sizeof", NULL, gent2.cuptype);
+    const CUPType* gent = cup_typeExt(state, printf_wrapper);
+    const CUPType* gent2 = cup_typeExt(state, get_size_wrapper);
+    cup_add_symbol(state, "printf", NULL, gent);
+    cup_add_symbol(state, "sizeof", NULL, gent2);
 #endif
     //const CUPType ft3 = cup_type_function(&cup_type_int, &cup_type_int);
     cup_add_symbol(state, "print", (void *)myprint, ft);
     cup_add_symbol(state, "print2", (void *)myprint2, ft2);
     cup_add_symbol(state, "print3", (void *)myprint3, ft3);
+    cup_add_symbol(state, "main", NULL, &cup_type_void);
   }
   int flagmask = 1;
-  const char *bytecode_path = NULL;
   const char *instructions_path = NULL;
 
   for (int i = 1; i < argc; i++) {
@@ -176,8 +198,7 @@ int main(int argc, char **argv) {
         cup_delete(state);
         return 1;
       }
-      bytecode_path = argv[i];
-      cup_bytecode_path(state, bytecode_path);
+      cup_bytecode_path(state, argv[i]);
     } else if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--instructions") == 0) {
       if (++i >= argc) {
         cup_errorf("Error: %s requires a filename argument", argv[i - 1]);
@@ -233,28 +254,33 @@ int main(int argc, char **argv) {
 
   printf("OK\n");
 
-  cup_output_object(state, "out.o");
+  //cup_output_object(state, , "out.o");
 
 #if CUPE
-  CVariable *add = cup_get_symbol(state, "s");
+  CVariable *get1 = cup_get_symbol(state, "get1");
   CVariable *a = cup_get_symbol(state, "a");
+  CVariable *mainf = cup_get_symbol(state, "main");
   if (a) {
     size_t* arrs = (size_t*)cup_var_value(a);
     printf("a = %p\n", arrs);
     if (arrs) {
-      printf("a[0] = %ld\n", arrs[0]);
-      printf("a[1] = %ld\n", arrs[1]);
+      printf("a[0] = %zu\n", arrs[0]);
+      printf("a[1] = %zu\n", arrs[1]);
     }
   }
-  if (add) {
+  if (mainf) {
+    typedef size_t (*Ft)();
+    printf("%p main() -> %zu\n", cup_var_value(mainf), ((Ft)cup_var_value(mainf))());
+  }
+  if (get1) {
     //typedef size_t (*Fadd)(size_t, size_t);
     //size_t r = ((Fadd)*add)(54, 10);
     //printf("add(54, 10) -> %ld\n", r);
-    typedef size_t (*Ft)(size_t);
+    typedef size_t (*Ft)();
     //size_t r = 251;
     //r = ((Ft)minus->value)(0);
     //printf("minus(0) -> %ld\n", r);
-    printf("s(2) -> %ld\n", ((Ft)cup_var_value(add))(2));
+    printf("%p get1() -> %zu\n", cup_var_value(get1), ((Ft)cup_var_value(get1))());
   }
   cup_list_symbols(state, NULL, symbol_cb);
 #endif

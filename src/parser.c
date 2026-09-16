@@ -1,8 +1,8 @@
 #include "../include/cup.h"
 
 //#include <threads.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
+//#include <sys/stat.h>
+//#include <sys/mman.h>
 
 //#include <dlfcn.h>
 //#include <libelf.h>
@@ -19,6 +19,9 @@
 void* cup_var_value(const CVariable* var) {
   if (var == NULL)
     return NULL;
+  char tname[256];
+  cup_type_snname(tname, sizeof(tname), var->type);
+  cup_dbgf("cup_var_value: %p %s", var, tname);
   return (void*)var->value;
 }
 const CUPType* cup_var_type(const CVariable* var) {
@@ -68,13 +71,8 @@ void scope_leave(CUPState *state) {
 
 void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope) {
   CVariable var = {{type}, value, scope};
-  printf("%s %ld\n", getString(state, name), var.scope);
   map_put(&state->symmap, name, &var, SIZE_MAX);
-}
-
-void putVar2(CUPState *state, size_t name, CVariable var) {
-  printf("%s %ld\n", getString(state, name), var.scope);
-  map_put(&state->symmap, name, &var, SIZE_MAX);
+  cup_dbgf("putVar %s %zu | %zu / %zu", getString(state, name), var.scope, state->symmap.count, state->symmap.capacity);
 }
 
 CVariable *getVar(const CMap *vars, size_t name, size_t scope ) {
@@ -92,10 +90,9 @@ CVariable *getVars(CUPState *state, size_t name, size_t depth) {
     CVariable *item = getVar(&state->symmap, name, depth);
     if (item)
       return item;
-    size_t next = state->scopes.data[depth];
-    if (next == SIZE_MAX)
+    if (state->scopes.data[depth] == SIZE_MAX)
       return NULL;
-    depth = next;
+    depth = state->scopes.data[depth];
   }
 }
 
@@ -329,11 +326,11 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     if (vvv == NULL) {
       putVar(state, name, NULL, 0, state->scope);
     } else {
-      if (vvv->type) {
+      if (vvv->type && vvv->type != &cup_type_void) {
         cup_type_snname(tname, sizeof(tname), vvv->type);
-        printf("defType_ function args type = %s\n", tname);
+        cup_dbgf("defType_ function args type = %s\n", tname);
         cup_error("redefined variable function");
-        exit(1);
+        exit(1);      
       }
     }
     vector_pushT(left.vec, name);
@@ -352,15 +349,15 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       vector_pushT(left.vec, comma);
     }
     
-    const CUPType** types = (const CUPType**)cup_talloc(sizeof(const CUPType*) * UINT8_MAX);
+
+    const CUPType** types = (const CUPType**)cup_talloc(sizeof(const CUPType*) * (argc + 2));
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
     types[argc + 1] = &cup_type_void;
-    CUPType fn_t = (CUPType){ sizeof(void *), CUP_TYPE_FUNCTION, (uint16_t)sizeof(void *), types };
-    const CUPType *type = cup_type_put(state, fn_t);
+    const CUPType *type = cup_type(state, CUP_TYPE_FUNCTION, argc + 1, types);
     cup_treset(0);
     cup_type_snname(tname, sizeof(tname), type);
-    printf("defType function type = %s\n", tname);
+    cup_dbgf("defType function type = %s\n", tname);
     vvv = getVars(state, name, state->scope);
     assert(vvv);
     vvv->type = type;
