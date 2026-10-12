@@ -454,15 +454,14 @@ static_assert(sizeof(struct FY) == 64, "");
 static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta) {
   switch (op) {
   case CUP_MOP_MEMBER: { // .
-    size_t len = strlen(meta.member.name);
-    if (len == 9 && memcmp(meta.member.name, "data_size", 9) == 0) {
+    if (meta.member.len == 9 && memcmp(meta.member.name, "data_size", 9) == 0) {
       size_t offset = offsetof(CUPState, data_size);
       cup_dbgf("data_size offset: %zu", offset);
       cup_gen_address(ctx, (char*)value + offset, &cup_type_int);
       return CUP_GEN_DONE;
     }
-    cup_dbgf("meta_this: %s %p", meta.member.name, value);
-    //cup_gen_value(ctx, );
+    cup_errorf("meta_this: unknown member '%s'", meta.member.name);
+    return CUP_GEN_ERROR;
   }
 
 //cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
@@ -470,8 +469,10 @@ static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value,
 //cup_gen_member(CUPGenContext *ctx, void *lvalue, const CUPType* type);
     break;
   case CUP_MOP_BRACK: // []
+    cup_error("meta_this: '[]' is not supported");
     break;
   case CUP_MOP_CALL: // (...)
+    cup_error("meta_this: '()' is not supported");
     break;
   }
   return CUP_GEN_ERROR;

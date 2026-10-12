@@ -101,6 +101,7 @@ void* r(void *ptr, size_t size) {
 #if CUPE
 
 CUP_GEN_RESULT get_size_wrapper_meta(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta) {
+  (void)value;
   switch (op) {
   case CUP_MOP_MEMBER: // .
     break;
@@ -128,6 +129,7 @@ CUP_GEN_RESULT get_size_wrapper_meta(CUPGenContext *ctx, CUP_META_OP op, void* v
 }
 
 CUP_GEN_RESULT printf_wrapper_meta(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta) {
+  (void)value;
   switch (op) {
   case CUP_MOP_MEMBER: // .
     break;

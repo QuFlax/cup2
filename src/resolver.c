@@ -17,6 +17,7 @@ typedef enum CUPValueType : uint8_t {
   CV_VALUE,
   CV_ADDRESS,
   CV_VARIABLE,
+  CV_FUNCTION, /* callee produced by cup_gen_call: as.value = {function type, address} */
 
   CV_LIST,
   //CV_BLOCK
@@ -53,6 +54,15 @@ static CUPValue toAddress(CUPValue var) {
 }
 
 static CUPValue inferTypes(CUPState *state, CVector* new, NRange* range, CUPValue* rtype, CUPValueFor fn);
+
+static Node* getNode(NRange* range) {
+  if (range->it >= range->end) {
+    cup_error("Incorrect Nodes");
+    exit(1);
+  }
+  return range->it++;
+}
+
 
 static CUPValue eq(CUPState *state, CVector* new, NRange* range) {
   CUPValue right = inferTypes(state, new, range, NULL, NULL);
@@ -158,41 +168,79 @@ l2:
     return left;
 }
 
+static void freeValue(CUPValue* v) {
+  if (v->vtype == CV_LIST && v->as.list.values) {
+    cup_free(v->as.list.values);
+    v->as.list.values = NULL;
+  }
+}
+
+static void pushNumber(CVector* new, Node tmpl, size_t value) {
+  tmpl.token = T_NUMBER;
+  vector_push(new, &tmpl, sizeof(Node));
+  tmpl.value = value;
+  vector_push(new, &tmpl, sizeof(Node));
+}
+
+/* Run a meta callback and translate its result into nodes in `new`.
+ * On success the returned value is gc.value (CV_VALUE / CV_ADDRESS /
+ * CV_FUNCTION); on failure CV_ERROR. */
+static CUPValue metaApply(CUPState* state, CVariable* var, CUP_META meta, CUPGenContext* gc) {
+  gc->state = state;
+  gc->value = (CUPValue){CV_ERROR, {}};
+  CUP_GEN_RESULT r = var->typee->metatype.gen(gc, meta.op, (void*)var->value, meta);
+  if (r == CUP_GEN_ERROR) {
+    cup_errorf("%s: meta callback failed", __FILE__);
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (r == CUP_GEN_CONTINUE) {
+    cup_errorf("%s: CUP_GEN_CONTINUE is not supported", __FILE__);
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (gc->value.vtype == CV_ERROR) {
+    cup_errorf("%s: meta callback returned DONE without a result", __FILE__);
+    return (CUPValue){CV_ERROR, {}};
+  }
+  return gc->value;
+}
+
 static CUPValue dot(CUPState *state, CVector* new, NRange* range, Node dotnode) {
   CVector leftvec = {};
   CUPValue left = inferTypes(state, &leftvec, range, NULL, NULL);
-  if (left.vtype != CV_VARIABLE) {
-    cup_error("left.vtype != CV_VARIABLE");
+  cup_free(leftvec.data);
+  /* member name is a raw identifier, not an expression: do not resolve it */
+  Node* namenode = getNode(range);
+  if (namenode->token != N_VARIABLE) {
+    freeValue(&left);
+    cup_error("dot: member name expected");
     return (CUPValue){CV_ERROR, {}};
   }
-  CVector rightvec = {};
-  CUPValue right = inferTypes(state, &rightvec, range, NULL, NULL);
+  Node* valnode = getNode(range);
+  const char* name = valnode->svalue;
+  if (left.vtype != CV_VARIABLE || left.as.variable.value == NULL) {
+    freeValue(&left);
+    cup_error("dot: left is not a variable");
+    return (CUPValue){CV_ERROR, {}};
+  }
   CVariable* var = left.as.variable.value;
-  if (right.vtype != CV_VARIABLE) {
-    cup_error("right.vtype != CV_VARIABLE");
+  if (var->typee == NULL || var->typee->cuptype != CUP_TYPE_META) {
+    cup_errorf("dot: member access '.%s' on a non-meta type", name);
     return (CUPValue){CV_ERROR, {}};
   }
-  if (var->typee->cuptype == CUP_TYPE_META) {
-    cup_dbg("CV_VARIABLE meta");
-    CUPGenContext gc = {state, {}};
-    CUP_META m = {};
-    m.member.name = right.as.variable.name;
-    CUP_GEN_RESULT r = var->typee->metatype.gen(&gc, CUP_MOP_MEMBER, (void*)var->value, m);
-    if (r == CUP_GEN_ERROR) {
-      cup_free(right.as.list.values);
-      cup_errorf("%s: r == CUP_GEN_ERROR", __FILE__);
-      return (CUPValue){CV_ERROR, {}};
-    }
-    if (r == CUP_GEN_CONTINUE) {
-      assert(0);
-    }
-    
-
-  } else {
-
+  CUP_META m = {.op = CUP_MOP_MEMBER};
+  m.member.name = name;
+  m.member.len = strlen(name);
+  CUPGenContext gc;
+  CUPValue v = metaApply(state, var, m, &gc);
+  switch (v.vtype) {
+  case CV_VALUE:
+  case CV_ADDRESS:
+    pushNumber(new, dotnode, (size_t)v.as.value.value);
+    return v;
+  default:
+    cup_errorf("dot: '.%s' did not produce a value or address", name);
+    return (CUPValue){CV_ERROR, {}};
   }
-  assert(0);
-  return (CUPValue){CV_ERROR, {}}; 
 }
 
 static CUPValue call(CUPState *state, CVector* new, NRange* range, Node callnode) {
@@ -200,80 +248,69 @@ static CUPValue call(CUPState *state, CVector* new, NRange* range, Node callnode
   CUPValue left = inferTypes(state, &leftvec, range, NULL, NULL);
   CVector rightvec = {};
   CUPValue right = inferTypes(state, &rightvec, range, NULL, NULL);
-  if (left.vtype == CV_LIST) {
-    cup_free(left.as.list.values);
-    goto l1;
+  CUPValue ret = {CV_ERROR, {}};
+
+  if (left.vtype != CV_VARIABLE || left.as.variable.value == NULL) {
+    cup_error("call: callee is not a variable");
+    goto out;
   }
-  if (left.vtype == CV_VALUE) {
-l1:
-    if (right.vtype == CV_LIST)
-      cup_free(right.as.list.values);
-    cup_error("left.vtype != lvalue");
-    return (CUPValue){CV_ERROR, {}};
+  CVariable* var = left.as.variable.value;
+  if (var->typee == NULL) {
+    cup_error("call: callee has no type");
+    goto out;
   }
-  if (left.vtype == CV_VARIABLE) {
-    CVariable* var = left.as.variable.value;
-    assert(var->typee);
-    if (right.vtype != CV_LIST) {
-      cup_error("right.vtype != CV_LIST");
-      return (CUPValue){CV_ERROR, {}};
-    }
-    size_t count = ((size_t*)right.as.list.types)[-1];
-    if (var->typee->cuptype == CUP_TYPE_FUNCTION) {
-      // TODO optimaize to value if posiable
-      assert(0);
-    }
-    if (var->typee->cuptype == CUP_TYPE_META) {
-      CUPGenContext gc = {state, {}};
-      CUP_META m = {};
-      m.call.argtypes = (const CUPType**)right.as.list.types; //(const CUPType **)right.as.list.types,
-      m.call.argvalues = right.as.list.values;
-      m.call.max = count;
-      CUP_GEN_RESULT r = var->typee->metatype.gen(&gc, CUP_MOP_CALL, (void*)var->value, m);
-      if (r == CUP_GEN_ERROR) {
-        cup_free(right.as.list.values);
-        cup_errorf("%s: r == CUP_GEN_ERROR", __FILE__);
-        return (CUPValue){CV_ERROR, {}};
-      }
-      if (r == CUP_GEN_CONTINUE) {
-        assert(0);
-      }
-      CUPValue value = gc.value;
-      Node2 nod = {};
-      switch (value.vtype) {
-      case CV_VARIABLE:
-        vector_push(new, &callnode, sizeof(Node)); // T_CALL
-        callnode.token = T_NUMBER;
-        vector_push(new, &callnode, sizeof(Node)); // T_NUMBER
-        callnode.value = (size_t)value.as.value.value;
-        vector_push(new, &callnode, sizeof(Node)); // value
-        push_vector(new, rightvec);
-        break;
-      case CV_VALUE:
-        callnode.token = T_NUMBER;
-        vector_push(new, &callnode, sizeof(Node)); // T_NUMBER
-        callnode.value = (size_t)value.as.value.value;
-        vector_push(new, &callnode, sizeof(Node)); // value
-        break;
-      default: {
-        assert(0);
-        CUPValue value = (CUPValue) {CV_VALUE, .as.value.typee = (const CUPType *)(right.as.list.types[count])};
-        cup_free(right.as.list.values);
-        //vector_push(new, start, (char*)range->it - start);
-        return value;
-      }
-      }
-      value.as.value.value = (size_t*)((char*)new->data + new->size - sizeof(Node));
-      cup_free(right.as.list.values);
-      return value;
-    }
-    cup_error("var->type->type is not function");
-    return (CUPValue){CV_ERROR, {}};
+  if (right.vtype != CV_LIST) {
+    cup_error("call: arguments are not a list");
+    goto out;
   }
-  assert(0);
+  size_t count = ((size_t*)right.as.list.types)[-1];
+  if (var->typee->cuptype == CUP_TYPE_FUNCTION) {
+    // TODO optimize to value if possible
+    cup_error("call: direct function calls are not resolved yet");
+    goto out;
+  }
+  if (var->typee->cuptype != CUP_TYPE_META) {
+    cup_error("call: callee type is not a function or meta");
+    goto out;
+  }
+  CUP_META m = {.op = CUP_MOP_CALL};
+  m.call.argtypes = (const CUPType**)right.as.list.types;
+  m.call.argvalues = right.as.list.values;
+  m.call.max = count;
+  CUPGenContext gc;
+  CUPValue v = metaApply(state, var, m, &gc);
+  switch (v.vtype) {
+  case CV_FUNCTION: {
+    /* runtime call: T_CALL, T_NUMBER <addr>, <args...> */
+    vector_push(new, &callnode, sizeof(Node));
+    pushNumber(new, callnode, (size_t)v.as.value.value);
+    push_vector(new, rightvec); /* consumes rightvec */
+    rightvec = (CVector){};
+    const CUPType* rt = v.as.value.typee->functiontype.returntype;
+    ret = (CUPValue){CV_VALUE, .as.value = {rt ? rt : &cup_type_void, NULL}};
+    break;
+  }
+  case CV_VALUE:
+    /* folded at compile time: the call collapses into a constant */
+    pushNumber(new, callnode, (size_t)v.as.value.value);
+    ret = v;
+    break;
+  default:
+    cup_error("call: meta callback did not produce a value or call");
+    break;
+  }
+out:
+  freeValue(&left);
+  freeValue(&right);
+  cup_free(leftvec.data);
+  cup_free(rightvec.data);
+  return ret;
 }
 
 static CUPValue osb(CUPState *state, CVector* new, NRange* range) {
+  /* caller already pushed the T_OSB node */
+  size_t mark = new->size - sizeof(Node);
+  Node osbnode = *(Node*)((char*)new->data + mark);
   CUPValue left = inferTypes(state, new, range, NULL, NULL);
   CUPValue right = inferTypes(state, new, range, NULL, NULL);
   if (left.vtype == CV_VALUE) {
@@ -281,6 +318,27 @@ static CUPValue osb(CUPState *state, CVector* new, NRange* range) {
       cup_free(right.as.list.values);
     cup_error("left.vtype == CV_VALUE");
     return (CUPValue){CV_ERROR, {}};
+  }
+  if (left.vtype == CV_VARIABLE && left.as.variable.value &&
+      left.as.variable.value->typee &&
+      left.as.variable.value->typee->cuptype == CUP_TYPE_META) {
+    CVariable* var = left.as.variable.value;
+    CUP_META m = {.op = CUP_MOP_BRACK};
+    if (right.vtype == CV_VALUE) {
+      m.brack.indextype = right.as.value.typee;
+      m.brack.indexvalue = right.as.value.value;
+    }
+    CUPGenContext gc;
+    CUPValue v = metaApply(state, var, m, &gc);
+    freeValue(&right);
+    if (v.vtype != CV_VALUE && v.vtype != CV_ADDRESS) {
+      cup_error("osb: meta callback did not produce a value or address");
+      return (CUPValue){CV_ERROR, {}};
+    }
+    /* drop T_OSB + operand nodes already emitted, replace with the result */
+    new->size = mark;
+    pushNumber(new, osbnode, (size_t)v.as.value.value);
+    return v;
   }
   if (left.vtype == CV_VARIABLE) {
     CVariable* var = left.as.variable.value;
@@ -398,14 +456,6 @@ static CUPValue defFor(CUPState *state, CVector* new, NRange* range, CUPValue* r
   return fn(values, types);
 }
 
-static Node* getNode(NRange* range) {
-  if (range->it >= range->end) {
-    cup_error("Incorrect Nodes");
-    exit(1);
-  }
-  return range->it++;
-}
-
 static CUPValue inferTypes(CUPState *state, CVector* new, NRange* range, CUPValue* rtype, CUPValueFor fn) {
   char* start = (char*)range->it;
   Node n = *getNode(range);
@@ -456,7 +506,7 @@ static CUPValue inferTypes(CUPState *state, CVector* new, NRange* range, CUPValu
       return (CUPValue){CV_ERROR, {}};
     }
     vector_push(new, start, (char*)range->it - start);
-    return (CUPValue){CV_VARIABLE, .as.variable = {var}};
+    return (CUPValue){CV_VARIABLE, .as.variable = {var, "$"}};
   }
   case N_VARIABLE: {
     const char* name = getNode(range)->svalue;
@@ -527,7 +577,7 @@ int resolve(CUPState *state, Nodes* nodes) {
   case CV_ADDRESS: break;
   case CV_VALUE: break;
   case CV_VARIABLE: break;
-  
+  case CV_FUNCTION: break;
   default: assert(0);
   }
   if (nodes->data) cup_free(nodes->data);
@@ -561,7 +611,7 @@ void cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type) {
 }
 
 void cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const void** types) {
-  ctx->value.vtype = CV_VARIABLE;
+  ctx->value.vtype = CV_FUNCTION;
   ctx->value.as.value.value = (size_t*)value;
   ctx->value.as.value.typee = cup_type(ctx->state, CUP_TYPE_FUNCTION, max, types);
   //ctx->node[0].token = T_CALL;

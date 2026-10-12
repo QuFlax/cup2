@@ -105,24 +105,43 @@ CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const voi
 CUP_API void cup_gen_address(CUPGenContext *ctx, void *lvalue, const CUPType* type);
 //void* cup_gen_get_value(CUPGenContext *ctx);
 
+/*
+ * Meta types ($, printf, sizeof, ...) are resolved at compile time by a
+ * CUP_Type_Meta callback. The callback receives the operation, the value
+ * bound to the symbol and a CUP_META describing the operands.
+ * CUP_META.op always equals the `op` argument; the active member of the
+ * anonymous union is selected by it:
+ *   CUP_MOP_MEMBER -> meta.member  ($.name)
+ *   CUP_MOP_BRACK  -> meta.brack   ($[index])
+ *   CUP_MOP_CALL   -> meta.call    ($(args...))
+ * Callback must report exactly one result through cup_gen_value /
+ * cup_gen_address / cup_gen_call and return CUP_GEN_DONE, or return
+ * CUP_GEN_ERROR (after logging). CUP_GEN_CONTINUE is reserved and is
+ * treated as an error by the resolver.
+ */
 typedef enum CUP_META_OP : uint8_t {
-    //CUP_MOP_VALUE,  // $
     CUP_MOP_MEMBER, // $.
     CUP_MOP_BRACK,  // $[]
     CUP_MOP_CALL,   // $(...)
 } CUP_META_OP;
 
-typedef union CUP_META {
-    struct {
-        const char* name;
-    } member;
-    struct {
-    } arr;
-    struct {
-        const CUPType **argtypes;
-        size_t **argvalues;
-        size_t max;
-    } call;
+typedef struct CUP_META {
+    CUP_META_OP op;
+    union {
+        struct {
+            const char* name;      /* NUL-terminated member name */
+            size_t      len;
+        } member;
+        struct {
+            const CUPType *indextype;   /* NULL if unknown */
+            size_t        *indexvalue;  /* NULL if not a compile-time constant */
+        } brack;
+        struct {
+            const CUPType **argtypes;   /* [max], entries may be NULL */
+            size_t        **argvalues;  /* [max], entries may be NULL */
+            size_t          max;
+        } call;
+    };
 } CUP_META;
 
 typedef CUP_GEN_RESULT (*CUP_Type_Meta)(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta);
