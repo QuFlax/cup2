@@ -57,21 +57,22 @@ const uint8_t* getdata(CUPState* state, const char* str, size_t len) {
  * @param index String index
  * @return Pointer to string or empty string if not found
  */
+/*
 const char *getString(CUPState *state, size_t index) {
   if (state == NULL || state->names == NULL || index == SIZE_MAX)
     return NULL;
 
-  /* Find the start sentinel [0, 0] */
+  // Find the start sentinel [0, 0]
   uint8_t *ptr = state->names - 1;
-  while (ptr > state->names - 1000) { /* safety limit */
+  while (ptr > state->names - 1000) { // safety limit
     if (ptr[0] == '\0' && ptr[-1] == '\0') {
-      ptr++; /* Move to position after [0, 0] */
+      ptr++; // Move to position after [0, 0] 
       break;
     }
     ptr--;
   }
 
-  /* Walk forward and count strings */
+  // Walk forward and count strings
   size_t current_index = 0;
   while (ptr < state->names) {
     if (*ptr == '\0') {
@@ -86,6 +87,7 @@ const char *getString(CUPState *state, size_t index) {
 
   return NULL;
 }
+*/
 
 /**
  * @brief Intern identifier string
@@ -94,7 +96,7 @@ const char *getString(CUPState *state, size_t index) {
  * @param len String length
  * @return Pointer to interned string
  */
-uint8_t *idToken(CUPState *state, const char *str, size_t len) {
+const char* idToken(CUPState *state, const char *str, size_t len) {
   if (len == 2 && memcmp(str, "if", 2) == 0) {
     state->nodes.token = T_IF;
     return NULL;
@@ -123,18 +125,24 @@ uint8_t *idToken(CUPState *state, const char *str, size_t len) {
     state->nodes.token = T_CONTINUE;
     return NULL;
   }
+  //state->nodes.value = 0;
+  state->nodes.token = T_IDENTIFIER;
+  char* dup = (char*)cup_malloc(len + 1);
+  memcpy(dup, str, len);
+  dup[len] = 0;
+  return state->nodes.svalue = dup;
+  /*
   uint8_t *current = state->names - 1;
-  state->nodes.value = 0;
   uint8_t *keyword = NULL;
 
   for (size_t l = 0;; current--) {
     if (current[-1] != '\0') {
-      /* Found [non-0, X] continue to found [0, non-0](strings_start) */
+      // Found [non-0, X] continue to found [0, non-0](strings_start)
       l++;
       continue;
     }
     if (*current == '\0') {
-      /* Found [0, 0] sentinel so keyword not found */
+      // Found [0, 0] sentinel so keyword not found
       current--;
       if (keyword == NULL) {
         const size_t size = state->names - current;
@@ -150,17 +158,18 @@ uint8_t *idToken(CUPState *state, const char *str, size_t len) {
     }
     state->nodes.value++;
     if (keyword == NULL) {
-      /* Found [0, non-0] strings_start */
+      // Found [0, non-0] strings_start
       if (l == len && memcmp(str, current, l) == 0) {
-        /* Match found and we need go to start */
+        // Match found and we need go to start
         keyword = current;
         state->nodes.value = 0;
       } else {
-        /* No match, continue to next keyword in backward order */
+        // No match, continue to next keyword in backward order
         l = 0;
       }
     }
   }
+  */
 }
 
 /* ========================================================================== */

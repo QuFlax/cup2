@@ -43,9 +43,15 @@ const char* X64Reg_names[] = {
   "R12",
   "R13",
   "R14",
-  "R15"
+  "R15",
+  "ERROR"
 };
 const X64Reg sysv_arg_regs[] = {RDI, RSI, RDX, RCX, R8, R9};
+const X64Reg win64_arg_regs[] = {RCX, RDX, R8, R9};
+
+static size_t reg_reserved = 0;
+
+
 
 /* ========================================================================
  *                    SCRATCH REGISTER RESERVATION
@@ -86,7 +92,7 @@ const X64Reg sysv_arg_regs[] = {RDI, RSI, RDX, RCX, R8, R9};
 static const X64Reg reg_pool[] = {R12, R13, R14, R15, R10, R11};
 #define REG_POOL_N (sizeof(reg_pool) / sizeof(reg_pool[0]))
 
-static uint16_t reg_reserved = 0; /* bit i set <=> reg_pool[i] is held */
+//static uint16_t reg_reserved = 0; /* bit i set <=> reg_pool[i] is held */
 
 static X64Reg reg_pick(X64Reg avoid_a, X64Reg avoid_b) {
   for (size_t i = 0; i < REG_POOL_N; i++) {
@@ -415,6 +421,14 @@ static void patch_rel(CUPModule *buf, size_t patch, size_t target) {
   memcpy(buf->data + patch, &d, sizeof(d));
 }
 
+static inline Node* getNode(NRange *cc) {
+  if (cc->it >= cc->end) {
+    cup_error("Incorrect Nodes");
+    exit(1);
+  }
+  return cc->it++;
+}
+
 static void codegen_op(CUPModule *buf, X64Reg target, X64Reg temp_reg, const CTType type) {
   switch (type) {
   case T_LESS:
@@ -447,12 +461,34 @@ static void codegen_op(CUPModule *buf, X64Reg target, X64Reg temp_reg, const CTT
   }
 }
 
-static inline Node* getNode(NRange *cc) {
-  if (cc->it >= cc->end) {
-    cup_error("Incorrect Nodes");
+static size_t codegen_dot(CUPState* state, CUPModule *buf, CReallocs* reallocs,
+  NRange* range, CReallocs* returns, CVariable *var) {
+  CVariable* right = NULL;
+  if (N_VARIABLE != getNode(range)->token) {
+    cup_error("codegen_dot 1");
     exit(1);
   }
-  return cc->it++;
+  const char* name = getNode(range)->svalue;
+  cup_dbgf("codegen_dot %s", name);
+  assert(0);
+  //CUPGenContext ccc = {state, {}};
+  //CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t k_null);
+  //size_t index = ((size_t*)var)[-2];
+  //CUP_META meta = {.member.name = name};
+  //CUP_GEN_RESULT r = var->typee->metatype.gen(&ccc, CUP_MOP_MEMBER, (void*)var->value, meta);
+  cup_dbgf("%p", &state->priv_stream);
+  //if (r == CUP_GEN_ERROR) {
+  //  //cup_free(right.as.list.values);
+  //  cup_errorf("%s: r == CUP_GEN_ERROR", __FILE__);
+  //  assert(0);
+  //  exit(1);
+  //}
+  //if (r == CUP_GEN_CONTINUE) {
+  //  assert(0);
+  //}
+  cup_error("T_DOT 4");
+  exit(1);
+  return 0;
 }
 
 size_t codegen_expr(CUPState* state, CUPModule *buf,
@@ -494,7 +530,8 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case N_ARRAY: {
       size_t value = getNode(range)->value;
       size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, value));
-      CObjRef ref = {off, 1, NULL, value};
+      (void)off;
+      //CObjRef ref = {off, 1, NULL, value};
       //vector_pushT(buf->objrefs.vec, ref);
       size_t count = codegen_expr(state, buf, treg, sreg, reallocs, range, returns, NULL);
       cup_dbgf("N_ARRAY count = %ld", count);
@@ -520,24 +557,46 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
     case T_STRING: {
       size_t idx = getNode(range)->value;
       size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)getData(state, idx));
-      CObjRef ref = {off, 1, NULL, idx};
+      (void)off;
+      //CObjRef ref = {off, 1, NULL, idx};
       //vector_pushT(buf->objrefs.vec, ref);
       return 0;
     }
+    case T_THIS: {
+      CVariable *var = varLookup(state, "$", state->scope);
+      if (var == NULL) {
+        assert(0);
+        exit(1);
+      }
+      if (rvalue) *rvalue = var;
+      {
+        size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
+        (void)off;
+        //CObjRef ref = {off, 0, var, 0};
+        //vector_pushT(buf->objrefs.vec, ref);
+      }
+      if (sreg != ANY) {
+        emit_mov_reg_deref(buf, treg, sreg);
+      }
+      return 0;
+    }
     case N_VARIABLE: {
-      size_t value = getNode(range)->value;
+      const char* name = getNode(range)->svalue;
+      cup_dbgf("codegen_expr N_VARIABLE %s", name);
       //state->nodes.value = value;
-      CVariable *var = getVars(state, value, state->scope);
+      CVariable *var = varLookup(state, name, state->scope);
       if (var == NULL) {
         assert(0);
         exit(1);
       }
       //CVariable* var = &(state->vars)[value];
       //state->nodes.variable = var;
+      cup_dbgf("N_VARIABLE: %zu", var->value);
       if (rvalue) *rvalue = var;
       {
         size_t off = emit_mov_reg_imm64(buf, treg, (uint64_t)&(var->value));
-        CObjRef ref = {off, 0, var, 0};
+        (void)off;
+        //CObjRef ref = {off, 0, var, 0};
         //vector_pushT(buf->objrefs.vec, ref);
       }
       if (sreg != ANY) {
@@ -622,6 +681,21 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
       emit_pop_reg(buf, temp_reg);
       return 0;
     }
+    case T_DOT: {
+      CVariable* var = NULL;
+      size_t i = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, &var);
+      if (i) {
+        cup_error("T_DOT 1");
+        exit(1);
+      }
+      if (var == NULL || var->typee->cuptype != CUP_TYPE_META) {
+        cup_error("T_DOT 2");
+        exit(1);
+      }
+      return codegen_dot(state, buf, reallocs, range, returns, var);
+      //emit_push_reg(buf, RAX);
+      //size_t count = codegen_expr(state, buf, RAX, RAX, reallocs, range, returns, NULL);
+    }
     case T_CALL: {
       // System V AMD64 ABI calling convention
       // Arguments in order: RDI, RSI, RDX, RCX, R8, R9, then stack
@@ -700,19 +774,19 @@ size_t codegen_expr(CUPState* state, CUPModule *buf,
         cup_error("N_FUNCTION 1");
         exit(1);
       }
-      if (var->type == NULL) {
+      if (var->typee == NULL) {
         cup_error("N_FUNCTION var type is NULL");
         exit(1);
       }
-      if (var->type->type != CUP_TYPE_FUNCTION) {
+      if (var->typee->cuptype != CUP_TYPE_FUNCTION) {
         cup_error("N_FUNCTION var type is not FUNCTION");
         exit(1);
       }
       state->scope++;
-      size_t arg_count = 0;
-      while (var->type->elements[arg_count + 1] != &cup_type_void) arg_count++;
+      size_t arg_count = var->typee->size;
+      //while (var->typee->elements[arg_count + 1] != &cup_type_void) arg_count++;
       if (arg_count == 0 && arg_count != codegen_expr(state, buf, RAX, ANY, reallocs, range, returns, NULL))
-          exit(17);
+        exit(17);
       buf->size = size;
       codegen_func(state, buf, reallocs, range, &var->value, arg_count);
       return 0;

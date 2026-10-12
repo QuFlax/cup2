@@ -82,8 +82,9 @@ typedef struct {
 union Node {
     CTType token;
     Loc    loc;
-    size_t value;
-    double dvalue;
+    size_t      value;
+    double      dvalue;
+    const char* svalue;
     CVariable  *variable;
     const CUPType* vtype;
 };
@@ -96,49 +97,84 @@ typedef enum CUP_GEN_RESULT {
 
 typedef struct CUPGenContext CUPGenContext;
 
-struct CUPGenContext {
-    CUPState* state;
-    Node node[3];
-};
-
-/**
- * Generator callback.
- *
- * A generator can either return a normal compile-time value with
- * cup_gen_set_value(), or construct a replacement AST expression with
- * cup_gen_add_node()/cup_gen_set_node(). The generated root must be node 0;
- * nodes must be emitted in the same prefix/preorder layout as the parser AST.
- */
-typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPGenContext *ctx,
-    const CUPType **argtypes, size_t **argvalues, size_t max);
+// typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPGenContext *ctx,
+//     const CUPType **argtypes, size_t **argvalues, size_t max);
 
 CUP_API void cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
-CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, const CUPType* rtype);
+CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const void** types);
+CUP_API void cup_gen_address(CUPGenContext *ctx, void *lvalue, const CUPType* type);
 //void* cup_gen_get_value(CUPGenContext *ctx);
-//CUP_EXTERN size_t cup_gen_add_node(CUPGenContext *ctx, Node node);
-//CUP_EXTERN void cup_gen_set_node(CUPGenContext *ctx, size_t root);
-//CUP_EXTERN void cup_gen_set_value(CUPGenContext *ctx, const CUPType *type, void *value);
 
-//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state, CUPValue* args, size_t max, const CUPType** rtype);
-//typedef CUP_GEN_RESULT (*CUP_Type_Gen)(CUPState* state,
-//    const CUPType **argtypes, void **argvalues,
-//    size_t max);
+typedef enum CUP_META_OP : uint8_t {
+    //CUP_MOP_VALUE,  // $
+    CUP_MOP_MEMBER, // $.
+    CUP_MOP_BRACK,  // $[]
+    CUP_MOP_CALL,   // $(...)
+} CUP_META_OP;
 
-
-union CUPTypeExt {
-    CUPType cuptype;
+typedef union CUP_META {
     struct {
-        uint8_t type;
+        const char* name;
+    } member;
+    struct {
+    } arr;
+    struct {
+        const CUPType **argtypes;
+        size_t **argvalues;
+        size_t max;
+    } call;
+} CUP_META;
+
+typedef CUP_GEN_RESULT (*CUP_Type_Meta)(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta);
+
+typedef struct CUPTypeMeta {
+    CUP_TYPE type;
+    uint8_t alignment;
+    uint16_t size;
+    CUP_Type_Meta gen;
+} CUPTypeMeta;
+
+typedef struct CUPTypeArr {
+    CUP_TYPE type;
+    uint8_t alignment;
+    uint16_t size;
+    const CUPType* element;
+} CUPTypeArr;
+
+typedef struct CUPTypeFunction {
+    CUP_TYPE type;
+    uint8_t alignment;
+    uint16_t size;
+    const CUPType* returntype;
+    const CUPType* argstype[];
+} CUPTypeFunction;
+
+typedef struct CUPTypeSimple {
+    CUP_TYPE type;
+    uint8_t alignment;
+    uint16_t size;
+} CUPTypeSimple;
+
+union CUPType {
+    struct {
+        CUP_TYPE       cuptype;
         uint8_t alignment;
         uint16_t size;
-        CUP_Type_Gen gen;
+        void* data[];
     };
+    const CUPTypeSimple   stype;
+    const CUPTypeArr      arrtype;
+    const CUPTypeFunction functiontype;
+    const CUPTypeMeta     metatype;
 };
 
-static_assert(sizeof(CUPType) == sizeof(CUPTypeExt), "sizeof(CUPType) == sizeof(CUPTypeExt)");
+CUP_API const CUPType* cup_typemeta(CUPState* state, uint16_t size, CUP_Type_Meta gen);
 
-CUP_API const CUPType* cup_typeExt(CUPState* state, CUP_Type_Gen gen);
-CUP_API const CUPType* cup_typeGen(CUPGenContext* ctx, CUP_TYPE type, uint16_t size, const CUPType **elements);
+static_assert(sizeof(CUPTypeSimple) == 4, "1");
+static_assert(sizeof(CUPTypeMeta) == 16, "2");
+static_assert(sizeof(CUPTypeArr) == 16, "3");
+static_assert(sizeof(CUPTypeFunction) == 16, "3");
+static_assert(sizeof(CUPType) == 16, "4");
 
 #if 0
 #define cup_type_generator(_func) (CUPTypeExt){ \
@@ -184,7 +220,7 @@ typedef union T##s { \
 } T##s
 #endif
 
-//CVecT(CUPValue);
+CVecT(size_t);
 
 typedef struct NRange {
     Node *it;
@@ -242,7 +278,7 @@ CUP_API void emit      (CUPModule *buf, const void *value, size_t size);
 
 CUP_API void codegen_func(CUPState* state, CUPModule* buf, CReallocs* reallocs, NRange* range, size_t *value, size_t arg_count);
 
-CUP_API void externalSymbol(CUPState* state, size_t name_idx, size_t sig_idx);
+CUP_API void externalSymbol(CUPState* state, const char* name, size_t sig_idx);
 
 /** @brief Write an ELF64 relocatable object file. */
 CUP_API int cup_output_object(CUPState *state, CReallocs* reallocs, const char *filename);

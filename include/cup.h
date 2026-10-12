@@ -56,11 +56,11 @@ typedef struct {
 } SymbolIterCtx;
 typedef void (*map_iter_callback)(void *ctx, const CMapItem *item);
 
-void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default);
-void map_free(CMap *m);
-CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t k_null);
-CMapItem *map_put(CMap *m, size_t key, void *value, size_t k_null);
-void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t k_null);
+//void map_init(CMap *m, size_t k_null, size_t v_size, void* v_default);
+//void map_free(CMap *m);
+//CMapItem *map_get(const CMap *m, size_t key, CMapItem *prev, size_t k_null);
+//CMapItem *map_put(CMap *m, size_t key, void *value, size_t k_null);
+//void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t k_null);
 /* Remove an entry (used when popping scopes). */
 //void       map_del(CMap *m, size_t name_idx, size_t v_size, size_t k_null);
 
@@ -93,21 +93,20 @@ typedef struct Node2 {
     };
     union {
         const CUPType* vtype;
-        size_t value;
-        double dvalue;
+        size_t      value;
+        double      dvalue;
+        const char* svalue;
     };
 } Node2;
 
 struct CVariable {
-    union {
-        const CUPType    *type; /**< Variable type */
-        const CUPTypeExt *etype; /**< Variable type */
-    };
-    //size_t name;         /**< Offset into string-intern table */
+    const char* name;
+    const CUPType* typee;
     size_t value;         /**< Variable value / symbol address */
     size_t scope;
-    //size_t parent;
 };
+
+CVecT(CVariable);
 
 void importModule(CUPState* state);
 void externalModule(CUPState* state);
@@ -128,7 +127,7 @@ typedef union CTypes {
 /*                           STRING INTERNING                                 */
 /* ========================================================================== */
 
-uint8_t       *idToken(CUPState *state, const char *str, size_t len);
+const char* idToken(CUPState *state, const char *str, size_t len);
 
 void getToken  (CUPState *state, int space);
 //void skipSpaces(CUPState *state);
@@ -166,20 +165,14 @@ struct CUPState {
         Node2 nodes;
         CVariable *variable;
     };
-    union {
-        struct {
-            size_t *data;
-            size_t size;
-        };
-        CVector vec;
-    } scopes;
+    size_ts scopes;
     size_t scope;
 
     /* String intern table.
      * names_base: original allocation pointer (needed for safe getString walk
      *             and for cup_delete to free exactly what was allocated).
      * names:      pointer to one past the last interned byte (grows upward). */
-    uint8_t *names;
+    //uint8_t *names;
 
     /* General data (string literal storage) */
     uint8_t *data;
@@ -197,7 +190,9 @@ struct CUPState {
     } externals;
 
     /* Variable table */
-    CMap symmap;
+    //CMap symmap;
+    CVariables vars;
+    size_t* vars_map;
 
     CTypes types;
     CUPTarget *target;
@@ -206,7 +201,7 @@ struct CUPState {
     Nodes ast;
     //CVector vector_;
     
-    size_t l1, l2, l3, l4;
+    size_t l1, l2, l3, l4, l5;
     // CUPCodeGen generator;
 };
 
@@ -225,8 +220,8 @@ typedef struct CVariable {
 */
 
 //CVariable* getVar(CUPState *state, size_t name);
-CVariable *getVars(CUPState *state, size_t name, size_t maxscope);
-void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope);
+CVariable *varLookup(CUPState *state, const char* name, size_t scope);
+void putVar(CUPState *state, const char* name, const CUPType* type, size_t value, size_t scope);
 
 //const CUPType    *cup_type_get(CUPState *state, const CUPType type);
 //const CUPType    *cup_type(CUPState *state, const CUPType type);

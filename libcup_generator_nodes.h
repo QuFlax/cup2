@@ -173,6 +173,7 @@ CUP_EXTERN CUPType cup_type_sint64;
         .gen = (_func) \
     }
 
+
 /** @brief Return a human-readable name for a type (freshly allocated). */
 size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
 //char *cup_type_name(const CUPType *type);
@@ -238,11 +239,7 @@ CVariable *cup_get_symbol(CUPState *state, const char *name);
 //const char* cup_var_name(CUPState* state, CVariable* var);
 //const CUPType* cup_var_type(CUPState* state, const CVariable* var);
 
-#ifdef CUPLISTSTATEINSL
 typedef void (*cup_list_symbols_callback)(CUPState *state, void *ctx, const char *name, const CVariable var);
-#else
-typedef void (*cup_list_symbols_callback)(void *ctx, const char *name, const CVariable var);
-#endif
 
 /** @brief Iterate over all registered symbols. */
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb);

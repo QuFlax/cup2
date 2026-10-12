@@ -72,20 +72,11 @@ void emit_error(CUPModule *buf, size_t size) {
   memcpy(buf->data, old, oldcap);
   VirtualFree(old, 0, MEM_RELEASE);
 }
-void emit(CUPModule *buf, const void *value, size_t size) {
-  if (buf == NULL) return;
-  size_t offset = buf->size;
-  emit_error(buf, size);
-  memcpy(buf->data + offset, value, size);
-}
 
 #else
-#include <dlfcn.h>
-#include <unistd.h>
-
-#include <linux/limits.h>
+#include <unistd.h> // readlink
+//#include <linux/limits.h> // PATH_MAX
 #include <sys/stat.h>
-#define __USE_GNU
 #include <sys/mman.h>
 
 const char *get_exe_path(void) {
@@ -134,6 +125,9 @@ void emit_error(CUPModule *buf, size_t size) {
   
   buf->data = mremap(buf->data, oldcap, buf->vec.capacity, MREMAP_MAYMOVE);
 }
+
+#endif
+
 void emit(CUPModule *buf, const void *value, size_t size) {
   if (buf == NULL) return;
   size_t offset = buf->size;
@@ -141,19 +135,18 @@ void emit(CUPModule *buf, const void *value, size_t size) {
   memcpy(buf->data + offset, value, size);
 }
 
-#endif
 
 int cup_version_major() { return 1; }
 int cup_version_minor() { return 12; }
 int cup_version() { return cup_version_minor() | (cup_version_major() * 0xFF); }
 
-
 Nodes statement(CUPState *state);
 
 void importModule(CUPState *state) {
+  const char* name = (const char*)getData(state, state->nodes.value);
   // CUPState copy;
   // memcpy(&copy, state, sizeof(CUPState));
-  const char *name = getString(state, state->nodes.value);
+  //const char *name = getString(state, state->nodes.value);
   if (cup_compile_file(state, name)) {
     cup_errorf("Load module '%s'", name);
     exit(1);
@@ -191,8 +184,7 @@ void externalModule(CUPState *state) {
   cup_free(base);
 }
 
-void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
-  const char *name = getString(state, name_idx);
+void externalSymbol(CUPState *state, const char* name, size_t sig_idx) {
   const uint8_t *sig = getData(state, sig_idx);
 
   void *fn = NULL;
@@ -209,7 +201,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
   }
 
   const CUPType *type = cup_type_parse(state, (const char *)sig);
-  CVariable *v = getVars(state, name_idx, 1);
+  CVariable *v = varLookup(state, name, 1);
   if (v) {
     cup_errorf("Cannot add symbol(%s) because it already exist", name);
     cup_errorf("external: could not register symbol '%s'", name);
@@ -217,7 +209,7 @@ void externalSymbol(CUPState *state, size_t name_idx, size_t sig_idx) {
   }
   //CVARS vars = {.vars = {{type, (size_t)fn, 1}}};
   //map_put(&state->symmap, name_idx, &vars, sizeof(CVARS), SIZE_MAX);
-  putVar(state, name_idx, type, (size_t)fn, 0);
+  putVar(state, name, type, (size_t)fn, 0);
 }
 
 void printInstructions(FILE *out, CUPModule *m) {
@@ -258,11 +250,11 @@ static void cup_write_bytecode_f(CUPState *state, const NRange range, FILE* f) {
     }
     else if (it->token == T_IDENTIFIER) {
       it++;
-      fprintf(f, " - %s\n", getString(state, it->value));
+      fprintf(f, " - %s\n", it->svalue);
     }
     else if (it->token == T_EQ || it->token == T_CALL
       || it->token == T_OSB || it->token == T_AT
-      || it->token == T_RETURN) {
+      || it->token == T_RETURN || it->token == T_THIS) {
       fputc('\n', f);
     }
     else if (it->token == N_ARRAY) {
@@ -326,7 +318,8 @@ void codegen(CUPState *state, CUPModule *m, Nodes nodes, size_t* init) {
   // return;
   // printf("init = %zx\n", init);
 
-  //symmap_iter(&state->symmap, state, printVar);
+  
+  cup_list_symbols(state, stdout, symbol_cb);
 }
 
 CUPModule *parse(CUPState *state, const char *buf, const char *file) {
@@ -342,6 +335,8 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
   const char *input_stream = state->input_stream;
   const char *priv_stream = state->priv_stream;
   Node2 ncopy = state->nodes;
+  
+  //putVar(state, );
 
   state->priv_stream = NULL;
   state->input_stream = buf;
@@ -364,8 +359,8 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
 
   state->scope = 0;
   size_t init = 0;
-  codegen(state, &m->module, nodes, &init);
-  cup_dbgf("page = %p, init = %p", m->module.data, (void *)init);
+  //codegen(state, &m->module, nodes, &init);
+  //cup_dbgf("page = %p, init = %p", m->module.data, (void *)init);
 #if 0
   NRange range = (NRange){nodes.data, (Node *)((char *)nodes.data + nodes.size)};
   if (state->bytecode_path)
@@ -373,7 +368,7 @@ CUPModule *parse(CUPState *state, const char *buf, const char *file) {
 #endif
 
   //puts("Nodes3");
-  state->scope = 0;
+  //state->scope = 0;
   int def = resolve(state, &nodes);
   if (def == 0) {
     state->scope = 0;
@@ -434,6 +429,54 @@ void cup_write_code(CUPState* state, CUPModule *m) {
   cup_free(generated);
 }
 
+struct FY {
+    /* Source input */
+    const char *input_stream;
+    const char *priv_stream;
+
+    /* Current parser token / node */
+    union {
+        Node2 nodes;
+        CVariable *variable;
+    };
+    union {
+        struct {
+            size_t *data;
+            size_t size;
+        };
+        CVector vec;
+    } scopes;
+    size_t scope;
+};
+
+static_assert(sizeof(struct FY) == 64, "");
+
+static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta) {
+  switch (op) {
+  case CUP_MOP_MEMBER: { // .
+    size_t len = strlen(meta.member.name);
+    if (len == 9 && memcmp(meta.member.name, "data_size", 9) == 0) {
+      size_t offset = offsetof(CUPState, data_size);
+      cup_dbgf("data_size offset: %zu", offset);
+      cup_gen_address(ctx, (char*)value + offset, &cup_type_int);
+      return CUP_GEN_DONE;
+    }
+    cup_dbgf("meta_this: %s %p", meta.member.name, value);
+    //cup_gen_value(ctx, );
+  }
+
+//cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
+//cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const void** types);
+//cup_gen_member(CUPGenContext *ctx, void *lvalue, const CUPType* type);
+    break;
+  case CUP_MOP_BRACK: // []
+    break;
+  case CUP_MOP_CALL: // (...)
+    break;
+  }
+  return CUP_GEN_ERROR;
+}
+
 CUPState *cup_new(int target) {
   (void)target;
 #define DCHART uint16_t
@@ -441,10 +484,21 @@ CUPState *cup_new(int target) {
   DCHART *names;
   cup_calloc(state, CUPState);
   cup_calloc(names, DCHART);
-  state->names = (uint8_t *)(names + 1);
-  CVariable def = {{NULL}, 0, 0};
-  map_init(&state->symmap, SIZE_MAX, sizeof(def), &def);
-  scope_enter(state);
+
+  //state->names = (uint8_t *)(names + 1);
+  //CVariable def = {NULL, 0, 0};
+  //map_init(&state->symmap, SIZE_MAX, sizeof(def), &def);
+  
+  size_t null_scope = SIZE_MAX;
+  vector_pushT(state->scopes.vec, null_scope);
+  size_t parent_to_this_scope = 0;
+  vector_pushT(state->scopes.vec, parent_to_this_scope);
+  state->scope = 1;
+
+  //const CUPType* charptr = cup_type(state, CUP_TYPE_POINTER, 0, (const void*[]){&cup_type_uint8});
+  const CUPType* thistype = cup_typemeta(state, 0, meta_this);
+  cup_add_symbol(state, "$", (void*)state, thistype);
+
   return state;
 }
 void cup_delete(CUPState *state) {
@@ -475,14 +529,11 @@ void cup_delete(CUPState *state) {
       dlclose(state->externals.data[i]);
   cup_free(state->externals.data);
 
-  if (state->names) {
-    uint8_t *base = state->names - 1;
-    while (!(base[-1] == '\0' && *base == '\0'))
-      base--;
-    cup_free(base - 1);
-  }
+  // TODO free var names
 
-  map_free(&state->symmap);
+  cup_free(state->vars_map);
+  cup_free(state->vars.data);
+
   cup_free(state->data);
   cup_free(state);
 }
@@ -521,22 +572,17 @@ int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType* 
   }
 
   size_t len = strlen(name);
-  if (!idToken(state, name, len))
-  {
+  if (!idToken(state, name, len)) {
     cup_errorf("Cannot add symbol(%s) because it is a keyword", token_names[state->nodes.token]);
     return -2;
   }
 
-  CVariable *v = getVars(state, state->nodes.value, 1);
+  CVariable *v = varLookup(state, state->nodes.svalue, 1);
   if (v) {
     cup_errorf("Cannot add symbol(%s) because it already exist", name);
     return -3;
   }
-  //const CUPType *t = cup_type(state, type);
-  // symmap_put(&state->symmap, state->nodes.value, t, (size_t)val, 0);
-  //CVARS vars = {.vars = {{t, (size_t)val, 1}}};
-  //map_put(&state->symmap, state->nodes.value, &vars, sizeof(CVARS), SIZE_MAX);
-  putVar(state, state->nodes.value, type, (size_t)val, 1);
+  putVar(state, state->nodes.svalue, type, (size_t)val, 1);
   return 0;
 }
 CVariable *cup_get_symbol(CUPState *state, const char *name) {
@@ -545,30 +591,27 @@ CVariable *cup_get_symbol(CUPState *state, const char *name) {
   if (name == NULL || *name == '\0')
     return NULL;
   size_t len = strlen(name);
-  idToken(state, name, len);
-  if (state->nodes.value == SIZE_MAX)
+  if (!idToken(state, name, len)) {
+    cup_errorf("Cannot add symbol(%s) because it is a keyword", token_names[state->nodes.token]);
     return NULL;
-  return getVars(state, state->nodes.value, 1);
+  }
+  CVariable *var = varLookup(state, state->nodes.svalue, 1);
+  if (var && var->typee != &cup_type_void)
+    return var;
+  return NULL;
 }
-#ifdef CUPLISTSTATEINSL
-static void map_iter_symbols(void *ctx, const CMapItem *item) {
-  SymbolIterCtx *ctxd = ctx;
-  ctxd->cb(ctxd->state, ctxd->user_ctx,
-    getString(ctxd->state, item->key),
-    *(const CVariable *)item->data);
-}
-#else
+/*
 static void map_iter_symbols(void *ctx, const CMapItem *item) {
   SymbolIterCtx *ctxd = ctx;
   const CVariable * var = (const CVariable *)item->data;
   ctxd->cb(ctxd->user_ctx,
     getString(ctxd->state, item->key), 
-    var->type, var->value, var->scope);
+    var->typee, var->value, var->scope);
 }
-#endif
+*/
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {
   if (state == NULL)
     return;
-  SymbolIterCtx ctxd = {state, ctx, cb};
-  map_iter(&state->symmap, &ctxd, map_iter_symbols, SIZE_MAX);
+  //SymbolIterCtx ctxd = {state, ctx, cb};
+  //map_iter(&state->symmap, &ctxd, map_iter_symbols, SIZE_MAX);
 }

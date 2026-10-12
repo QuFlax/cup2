@@ -5,9 +5,19 @@
 
 #include "cup.h"
 //#include <threads.h>
-#include "platform.h"
+#ifndef thread_local
+  #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    #define thread_local _Thread_local
+  #elif defined(__GNUC__) || defined(__clang__)
+    #define thread_local __thread
+  #elif defined(__MSC_VER)
+    #define thread_local __declspec(thread)
+  #else
+    #error "Thread-local storage not supported by this compiler."
+  #endif
+#endif
 
-#define INITIAL_CAPACITY (sizeof(size_t) * 4)
+#define INITIAL_CAPACITY (sizeof(size_t) * 8)
 
 /* ========================================================================== */
 /*                       THREAD-LOCAL ALLOCATOR / LOGGER                      */
@@ -197,8 +207,9 @@ void split_vector(CVector *dest, CVector* src, size_t size) {
  * smaller probe distance ("richer" entry), keeping max probe length short.
  */
 
+/*
 size_t map_hash(size_t key) {
-  /* Fibonacci / multiplicative hashing for size_t keys */
+  // Fibonacci / multiplicative hashing for size_t keys
   return key * (size_t)11400714819323198485ULL;
 }
 
@@ -293,7 +304,7 @@ CMapItem *map_put(CMap *m, size_t key, void *value, size_t k_null) {
     }
 #endif
     if (item->dist < dist) {
-      /* Robin Hood swap */
+      // Robin Hood swap
       uint8_t tmp[sizeof(size_t) * 8];
       memcpy(tmp, item, item_size);
       item->key = key; item->dist = dist; memcpy(item->data, value, m->v_size);
@@ -314,6 +325,7 @@ void map_iter(const CMap *m, void *ctx, map_iter_callback cb, size_t k_null) {
     cb(ctx, item);
   }
 }
+*/
 
 /*
 

@@ -14,7 +14,7 @@ CUP_NAME := cup
 CFLAGS := -ggdb -Wall -Wextra -O0 -I. -I./include -MMD -MP
 
 # Linux flags
-LINUXB_CFLAGS  := $(CFLAGS) -fsanitize=memory -fPIC
+LINUXB_CFLAGS  := -D_GNU_SOURCE $(CFLAGS) -fsanitize=memory -fPIC
 LINUXB_LDFLAGS := -ldl # -lm
 
 # Windows 

@@ -20,14 +20,14 @@ void* cup_var_value(const CVariable* var) {
   if (var == NULL)
     return NULL;
   char tname[256];
-  cup_type_snname(tname, sizeof(tname), var->type);
+  cup_type_snname(tname, sizeof(tname), var->typee);
   cup_dbgf("cup_var_value: %p %s", var, tname);
   return (void*)var->value;
 }
 const CUPType* cup_var_type(const CVariable* var) {
   if (var == NULL)
     return NULL;
-  return var->type;
+  return var->typee;
 }
 
 Nodes primary(CUPState *state, uint8_t mpower);
@@ -69,30 +69,60 @@ void scope_leave(CUPState *state) {
   state->scope = parent;
 }
 
-void putVar(CUPState *state, size_t name, const CUPType* type, size_t value, size_t scope) {
-  CVariable var = {{type}, value, scope};
-  map_put(&state->symmap, name, &var, SIZE_MAX);
-  cup_dbgf("putVar %s %zu | %zu / %zu", getString(state, name), var.scope, state->symmap.count, state->symmap.capacity);
+static size_t hash_key(const char *s, size_t scope) {
+    size_t h = 1469598103934665603ULL ^ (scope * 0x9E3779B97F4A7C15ULL);
+    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }
+    return h;
 }
 
-CVariable *getVar(const CMap *vars, size_t name, size_t scope ) {
-  CMapItem *item = NULL;
-  while ((item = map_get(vars, name, item, SIZE_MAX))) {
-    CVariable *var = (CVariable *)item->data;
-    if (var->scope == scope)
-      return (CVariable *)item->data;
+static void varInsert(CUPState *state, size_t id) {
+  size_t mask = (state->vars.vec.capacity/sizeof(CVariable) - 1);
+  size_t i = hash_key(state->vars.data[id].name, state->vars.data[id].scope) & mask;
+  while(state->vars_map[i]) i = (i + 1) & mask;
+  state->vars_map[i] = id + 1;
+}
+
+void putVar(CUPState *state, const char* name, const CUPType* type, size_t value, size_t scope) {
+  CVariable var = {name, type, value, scope};
+  size_t cap = state->vars.vec.capacity;
+  vector_push(&state->vars.vec, &var, sizeof(var));
+  size_t pos = state->vars.size/sizeof(var);
+  size_t ncap = state->vars.vec.capacity/sizeof(var);
+  if (state->vars.vec.capacity != cap) {
+    cup_free(state->vars_map);
+    size_t nsize = ncap * sizeof(size_t);
+    state->vars_map = cup_malloc(nsize);
+    memset(state->vars_map, 0, nsize);
+    for (size_t i = 0; i < pos; i++) 
+      varInsert(state, i);
+  } else {
+    varInsert(state, pos - 1);
+  }
+  //map_put(&state->symmap, name, &var, SIZE_MAX);
+  //cup_dbgf("putVar %s %zu | %zu / %zu", getString(state, name), var.scope, state->symmap.count, state->symmap.capacity);
+}
+
+CVariable *varFind(CUPState *state, const char* name, size_t scope) {
+  if (state->vars.vec.capacity == 0) return NULL;
+  size_t ncap = state->vars.vec.capacity/sizeof(CVariable);
+  size_t mask = (ncap - 1);
+  size_t i = hash_key(name, scope) & mask;
+  for(size_t n = 0; n < ncap; n++) {
+    size_t slot = state->vars_map[i];
+    if (!slot) break;
+    CVariable* v = &state->vars.data[slot - 1];
+    if (v->scope == scope && !strcmp(v->name, name)) return v;
+    i = (i + 1) & mask;
   }
   return NULL;
 }
 
-CVariable *getVars(CUPState *state, size_t name, size_t depth) {
+CVariable *varLookup(CUPState *state, const char* name, size_t scope) {
   for (;;) {
-    CVariable *item = getVar(&state->symmap, name, depth);
-    if (item)
-      return item;
-    if (state->scopes.data[depth] == SIZE_MAX)
-      return NULL;
-    depth = state->scopes.data[depth];
+    CVariable *v = varFind(state, name, scope);
+    if (v) return v;
+    if (scope == 0) return NULL;
+    scope = state->scopes.data[scope];
   }
 }
 
@@ -218,7 +248,6 @@ uint8_t getPower(CTType t) {
   case T_IF:
   case T_RETURN:
   case T_NL:
-  case T_OCB:
   case T_CRB:
   case T_CCB:
   case T_CSB:
@@ -266,6 +295,8 @@ uint8_t getPower(CTType t) {
     return 16;
   case T_CALL:
     return 18;
+  case T_OCB:
+    return 1;
   case T_OSB:
     return CUPDEFPOWER;
   }
@@ -293,19 +324,19 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     externalModule(state);
     getToken(state, 1);
     while (state->nodes.token == T_IDENTIFIER) {
-      size_t name_idx = state->nodes.value;
+      const char* name = state->nodes.svalue;
       getToken(state, 1);
       if (state->nodes.token != T_STRING) {
         cup_errorf("external: expected signature string after name, got '%s'", token_names[state->nodes.token]);
         return left;
       }
-      size_t sig_idx = state->nodes.value;
-      externalSymbol(state, name_idx, sig_idx);
+      externalSymbol(state, name, state->nodes.value);
       getToken(state, 1);
     }
     return left;
   }
   case T_AT: { // function
+    char tname[256] = {};
     Node n = state->nodes.node;
     getToken(state, 1);
 
@@ -319,21 +350,19 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       return left;
     }
     vector_pushT(left.vec, n);           // T_AT
-    vector_pushT(left.vec, state->nodes.node); // T_IDENTIFIER
-    size_t name = state->nodes.value;
-    char tname[256];
-    CVariable* vvv = getVars(state, name, state->scope);
+    vector_pushT(left.vec, state->nodes); // T_IDENTIFIER
+    const char* name = state->nodes.svalue;
+    CVariable* vvv = varLookup(state, name, state->scope);
     if (vvv == NULL) {
       putVar(state, name, NULL, 0, state->scope);
     } else {
-      if (vvv->type && vvv->type != &cup_type_void) {
-        cup_type_snname(tname, sizeof(tname), vvv->type);
+      if (vvv->typee && vvv->typee != &cup_type_void) {
+        cup_type_snname(tname, sizeof(tname), vvv->typee);
         cup_dbgf("defType_ function args type = %s\n", tname);
         cup_error("redefined variable function");
         exit(1);      
       }
     }
-    vector_pushT(left.vec, name);
     getToken(state, 1);
 
     scope_enter(state);
@@ -350,17 +379,17 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     }
     
 
-    const CUPType** types = (const CUPType**)cup_talloc(sizeof(const CUPType*) * (argc + 2));
+    const void ** types = (const void **)cup_talloc(sizeof(const CUPType*) * (argc + 2));
     /* Function layout: [return, arg0, ..., argN-1, void-sentinel].
      * NULL argument slots mean unknown/any. */
     types[argc + 1] = &cup_type_void;
-    const CUPType *type = cup_type(state, CUP_TYPE_FUNCTION, argc + 1, types);
+    const CUPType *type = cup_type(state, CUP_TYPE_FUNCTION, argc + 1, (const void *)types);
     cup_treset(0);
     cup_type_snname(tname, sizeof(tname), type);
     cup_dbgf("defType function type = %s\n", tname);
-    vvv = getVars(state, name, state->scope);
+    vvv = varLookup(state, name, state->scope);
     assert(vvv);
-    vvv->type = type;
+    vvv->typee = type;
     
     push_vector(&left.vec, args_nodes.vec);
 
@@ -403,17 +432,21 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     break;
   }
   case T_IDENTIFIER: {
-    vector_pushT(left.vec, state->nodes.node);
-    size_t name = state->nodes.value;
-    CVariable* v = getVars(state, name, state->scope);
-    if (v == NULL) {
-      putVar(state, name, NULL, 0, state->scope);
+    vector_pushT(left.vec, state->nodes);
+    const char* name = state->nodes.svalue;
+    if (state->scope == 0) {
+      cup_error("primary: T_IDENTIFIER state->scope == 0");
     } else {
-      // TODO: check is it conflict name and type
-      //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";
-      //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
+      CVariable* v = varLookup(state, name, state->scope);
+      if (v == NULL) {
+        putVar(state, name, NULL, 0, state->scope);
+      } else {
+        cup_error("primary: T_IDENTIFIER getVars v != NULL");
+        // TODO: check is it conflict name and type
+        //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";
+        //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
+      }
     }
-    vector_pushT(left.vec, name);
     getToken(state, 1);
     break;
   }
@@ -435,6 +468,11 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       }
     }
     vector_pushT(left.vec, n);
+    break;
+  }
+  case T_THIS: {
+    vector_pushT(left.vec, state->nodes.node);
+    getToken(state, 1);
     break;
   }
   case T_CALL: { // '('
@@ -522,7 +560,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     break;
   }
   default: {
-    cup_errorf("primary: Unexpected token '%s'", token_names[state->nodes.token]);
+    cup_errorf("primary expr: Unexpected token '%s'", token_names[state->nodes.token]);
     exit(1);
     break;
   }
@@ -534,9 +572,7 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   while (1) {
     Node2 opnode = state->nodes;
     const uint8_t power = getPower(opnode.token);
-#if DEBUG_LOG
-    printf("power: %d > %s %d\n", mpower, token_names[opnode.token], power);
-#endif
+    cup_dbgf("power: %d > %s %d", mpower, token_names[opnode.token], power);
     if (power == UINT8_MAX) {
       cup_errorf("primary op1: Unexpected token %s", token_names[opnode.token]);
       exit(1);
@@ -553,10 +589,23 @@ Nodes primary(CUPState *state, uint8_t mpower) {
       tempn.value = 0;
       vector_pushT(right.vec, tempn);
     } else {
-      right = primary(state, norb ? CUPDEFPOWER : power);
+      const uint8_t rec = norb ? CUPDEFPOWER : power;
+      cup_dbgf("rec: %d", rec);
+      if (rec == 16) { // T_DOT
+        size_t saves = state->scope;
+        state->scope = 0;
+        right = primary(state, 16);
+        state->scope = saves;
+      } else {
+        right = primary(state, rec);
+      }
     }
 
     switch (opnode.token) {
+    case T_DOT: {
+      vector_fpushT(left.vec, opnode.node);
+      break;
+    }
     case T_CALL: {
       if (state->nodes.token != T_CRB) {
         cup_errorf("Expected T_CRB, but got %s", token_names[state->nodes.token]);

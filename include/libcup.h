@@ -42,12 +42,13 @@ CUP_API int cup_version_major();
 CUP_API int cup_version_minor();
 CUP_API int cup_version();
 
-typedef union  Node       Node;
-typedef struct CUPState   CUPState;
-typedef struct CUPModule  CUPModule;
-typedef struct CUPType    CUPType;
-typedef union  CUPTypeExt CUPTypeExt;
-typedef struct CVariable  CVariable;
+typedef union  Node        Node;
+typedef struct CUPState    CUPState;
+typedef struct CUPModule   CUPModule;
+typedef union CUPType      CUPType; 
+//typedef union  CUPTypeGen  CUPTypeGen;
+//typedef union  CUPTypeMeta CUPTypeMeta;
+typedef struct CVariable   CVariable;
 
 /* ========================================================================== */
 /*                              ALLOCATOR / LOGGER                            */
@@ -93,33 +94,27 @@ typedef enum CUP_TYPE : uint8_t {
     CUP_TYPE_SINT32,
     CUP_TYPE_UINT64,
     CUP_TYPE_SINT64,
-    CUP_TYPE_STRUCT,
     CUP_TYPE_POINTER,
     CUP_TYPE_ARRAY,
+    //CUP_TYPE_GENERATOR,
     CUP_TYPE_FUNCTION,
-    CUP_TYPE_GENERATOR,
+    CUP_TYPE_STRUCT,
+    CUP_TYPE_META,
     CUP_TYPE_COUNT
 } CUP_TYPE;
 
-struct CUPType {
-    CUP_TYPE type;
-    uint8_t alignment;
-    uint16_t size;
-    const CUPType **elements;
-};
-
-CUP_EXTERN CUPType cup_type_void;
-CUP_EXTERN CUPType cup_type_int;
-CUP_EXTERN CUPType cup_type_float;
-CUP_EXTERN CUPType cup_type_double;
-CUP_EXTERN CUPType cup_type_uint8;
-CUP_EXTERN CUPType cup_type_sint8;
-CUP_EXTERN CUPType cup_type_uint16;
-CUP_EXTERN CUPType cup_type_sint16;
-CUP_EXTERN CUPType cup_type_uint32;
-CUP_EXTERN CUPType cup_type_sint32;
-CUP_EXTERN CUPType cup_type_uint64;
-CUP_EXTERN CUPType cup_type_sint64;
+CUP_EXTERN const CUPType cup_type_void;
+CUP_EXTERN const CUPType cup_type_int;
+CUP_EXTERN const CUPType cup_type_float;
+CUP_EXTERN const CUPType cup_type_double;
+CUP_EXTERN const CUPType cup_type_uint8;
+CUP_EXTERN const CUPType cup_type_sint8;
+CUP_EXTERN const CUPType cup_type_uint16;
+CUP_EXTERN const CUPType cup_type_sint16;
+CUP_EXTERN const CUPType cup_type_uint32;
+CUP_EXTERN const CUPType cup_type_sint32;
+CUP_EXTERN const CUPType cup_type_uint64;
+CUP_EXTERN const CUPType cup_type_sint64;
 
 #if 0
 #define cup_type_pointer(_type) (CUPType) { \
@@ -156,17 +151,16 @@ CUP_EXTERN CUPType cup_type_sint64;
 
 /** @brief Return a human-readable name for a type (freshly allocated). */
 CUP_API size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type);
-//char *cup_type_name(const CUPType *type);
 
-CUP_API const CUPType* cup_type(CUPState* state, CUP_TYPE type, uint16_t size, const CUPType **elements);
-CUP_API const CUPType* cup_vtypef(CUPState* state, uint8_t count, va_list args);
-CUP_API const CUPType* cup_typef(CUPState* state, uint8_t count, ...);
+CUP_API const CUPType* cup_type(CUPState* state, CUP_TYPE type, uint16_t size, const void * data);
+//CUP_API const CUPType* cup_vtypef(CUPState* state, size_t count, va_list args);
+//CUP_API const CUPType* cup_typef(CUPState* state, size_t count, ...);
 
 CUP_API void* cup_var_value(const CVariable* var);
 CUP_API const CUPType* cup_var_type(const CVariable* var);
 
 CUP_API const uint8_t *getData(CUPState *state, size_t i);
-CUP_API const char    *getString(CUPState *state, size_t index);
+//CUP_API const char    *getString(CUPState *state, size_t index);
 
 /* ========================================================================== */
 /*                              TARGETS                                       */
@@ -202,10 +196,10 @@ CUP_API void cup_delete(CUPState *state);
 /* ========================================================================== */
 
 /**
- * @brief Register an external symbol.
+ * @brief Register an external symbol with right value.
  * @return 0 on success, negative error code otherwise.
  */
-CUP_API int cup_add_symbol(CUPState *state, const char *name, void *val, const CUPType* type);
+CUP_API int cup_add_symbol(CUPState *state, const char *name, void *value, const CUPType* type);
 
 /**
  * @brief Look up a symbol by name.
