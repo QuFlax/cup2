@@ -297,7 +297,7 @@ const CUPType* cup_type_parse(CUPState* state, const char* sig) {
 size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type) {
   assert(s != NULL);
   size_t total = 0;
-  if (!type) {
+  if (type == NULL) {
     APPEND_LITERAL("null");
     return total;
   }

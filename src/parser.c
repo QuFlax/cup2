@@ -559,6 +559,9 @@ Nodes primary(CUPState *state, uint8_t mpower) {
     getToken(state, 1);
     break;
   }
+  case T_AND: {
+    assert(0);
+  }
   default: {
     cup_errorf("primary expr: Unexpected token '%s'", token_names[state->nodes.token]);
     exit(1);

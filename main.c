@@ -138,7 +138,7 @@ CUP_GEN_RESULT printf_wrapper_meta(CUPGenContext *ctx, CUP_META_OP op, void* val
   case CUP_MOP_CALL: // (...)
     {
       if (meta.call.max > 0) {
-        if (meta.call.argvalues[0] == NULL) {
+        if (meta.call.argvalues[0] == 0) {
           //cup_error("");
           return CUP_GEN_ERROR;
         }
@@ -159,7 +159,7 @@ CUP_GEN_RESULT printf_wrapper_meta(CUPGenContext *ctx, CUP_META_OP op, void* val
         }
       }
       assert(UINT8_MAX > (meta.call.max + 1));
-      const void* DTypes[UINT8_MAX] = {};
+      const CUPType* DTypes[UINT8_MAX] = {};
       memcpy(DTypes + 1, meta.call.argtypes, meta.call.max * sizeof(void*));
       DTypes[0] = &cup_type_void;
       DTypes[meta.call.max + 1] = &cup_type_void;

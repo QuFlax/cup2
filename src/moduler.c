@@ -226,7 +226,7 @@ void printInstructions(FILE *out, CUPModule *m) {
 }
 
 static void symbol_cb(void *ctx, const char *name, const CUPType *type, size_t value, size_t scope) {
-  char tname[256];
+  char tname[256] = {};
   cup_type_snname(tname, sizeof(tname), type);
   fprintf((FILE*)ctx, "%s[%zu], type= %s, value= %zu\n", name, scope, tname, value);
 }
@@ -463,10 +463,6 @@ static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value,
     cup_errorf("meta_this: unknown member '%s'", meta.member.name);
     return CUP_GEN_ERROR;
   }
-
-//cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
-//cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const void** types);
-//cup_gen_member(CUPGenContext *ctx, void *lvalue, const CUPType* type);
     break;
   case CUP_MOP_BRACK: // []
     cup_error("meta_this: '[]' is not supported");
@@ -601,18 +597,11 @@ CVariable *cup_get_symbol(CUPState *state, const char *name) {
     return var;
   return NULL;
 }
-/*
-static void map_iter_symbols(void *ctx, const CMapItem *item) {
-  SymbolIterCtx *ctxd = ctx;
-  const CVariable * var = (const CVariable *)item->data;
-  ctxd->cb(ctxd->user_ctx,
-    getString(ctxd->state, item->key), 
-    var->typee, var->value, var->scope);
-}
-*/
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {
   if (state == NULL)
     return;
-  //SymbolIterCtx ctxd = {state, ctx, cb};
-  //map_iter(&state->symmap, &ctxd, map_iter_symbols, SIZE_MAX);
+  for (size_t i = 0; i < state->vars.size; i++) {
+    CVariable v = state->vars.data[i];
+    cb(ctx, v.name, v.typee, v.value, v.scope);
+  }
 }

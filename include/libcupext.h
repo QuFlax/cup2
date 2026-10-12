@@ -101,7 +101,7 @@ typedef struct CUPGenContext CUPGenContext;
 //     const CUPType **argtypes, size_t **argvalues, size_t max);
 
 CUP_API void cup_gen_value(CUPGenContext *ctx, void *value, const CUPType* type);
-CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const void** types);
+CUP_API void cup_gen_call(CUPGenContext *ctx, void *value, size_t max, const CUPType* const* types);
 CUP_API void cup_gen_address(CUPGenContext *ctx, void *lvalue, const CUPType* type);
 //void* cup_gen_get_value(CUPGenContext *ctx);
 
@@ -125,26 +125,28 @@ typedef enum CUP_META_OP : uint8_t {
     CUP_MOP_CALL,   // $(...)
 } CUP_META_OP;
 
-typedef struct CUP_META {
-    CUP_META_OP op;
-    union {
-        struct {
-            const char* name;      /* NUL-terminated member name */
-            size_t      len;
-        } member;
-        struct {
-            const CUPType *indextype;   /* NULL if unknown */
-            size_t        *indexvalue;  /* NULL if not a compile-time constant */
-        } brack;
-        struct {
-            const CUPType **argtypes;   /* [max], entries may be NULL */
-            size_t        **argvalues;  /* [max], entries may be NULL */
-            size_t          max;
-        } call;
-    };
+typedef union CUP_META {
+    struct {
+        const char* name;      /* NUL-terminated member name */
+        size_t      len;
+    } member;
+    struct {
+        const CUPType *indextype;   /* NULL if unknown */
+        size_t        indexvalue;
+    } brack;
+    struct {
+        const CUPType **argtypes; // [max], entries may be NULL
+        size_t        *argvalues; // [max]
+        size_t        max;
+    } call;
 } CUP_META;
 
 typedef CUP_GEN_RESULT (*CUP_Type_Meta)(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta);
+
+/* Metadata callbacks: ERROR rejects the operation, CONTINUE leaves it in the
+ * AST for normal resolution, and DONE consumes it and returns a result through
+ * cup_gen_value(), cup_gen_address(), or cup_gen_call(). CUP_META pointers are
+ * borrowed and must not be retained. */
 
 typedef struct CUPTypeMeta {
     CUP_TYPE type;
