@@ -368,39 +368,47 @@ static CUPValue osb(CUPState *state, CVector* new, NRange* range) {
     pushNumber(new, osbnode, (size_t)v.as.value.value);
     return v;
   }
-  if (left.vtype == CV_VARIABLE) {
-    CVariable* var = left.as.variable.value;
-    if (right.vtype == CV_VALUE) {
-      if (right.as.value.type == &cup_type_void) {
-        cup_error("right.as.value.type == &cup_type_void.cuptype");
-        return (CUPValue){CV_ERROR, {}};
-      }
-      if (var->typee == NULL)
-        assert(0);
-      if (var->typee->cuptype != CUP_TYPE_ARRAY)
-        assert(0);
-      if (var->typee->arrtype.element == NULL)
-        assert(0);
-      char tname[256] = {};
-      char tname2[256] = {};
-      cup_type_snname(tname, sizeof(tname), right.as.value.type);
-      cup_type_snname(tname2, sizeof(tname2), var->typee->arrtype.element );
-      cup_dbgf("osb %s : %ld / %s", tname, right.as.value.value, tname2);
-      if (var->typee->arrtype.element != right.as.value.type) {
-        assert(0);
-      }
-      // right.as.rtype == var-type
-      if (right.as.value.type == &cup_type_int) {
-        return (CUPValue){ CV_ADDRESS, .as.address = {right.as.value.type,
-          (size_t*)(var->value + right.as.value.value) }};
-      } else {
-        assert(0);
-      }
-      return (CUPValue){ CV_ADDRESS, .as.address = {.type = var->typee->arrtype.element, .pvalue = &var->value }};
-    }
-    assert(0);
+  /* array indexing: left is a variable or an address holding an array */
+  const CUPType* arrtype = NULL;
+  size_t base = 0;
+  if (left.vtype == CV_VARIABLE && left.as.variable.value) {
+    arrtype = left.as.variable.value->typee;
+    base = left.as.variable.value->value;
+  } else if (left.vtype == CV_ADDRESS && left.as.address.pvalue) {
+    arrtype = left.as.address.type;
+    base = *left.as.address.pvalue; /* slot holds the pointer to the array data */
+  } else {
+    freeValue(&right);
+    cup_error("osb: left is not a variable or address");
+    return (CUPValue){CV_ERROR, {}};
   }
-  assert(0);
+  if (arrtype == NULL || arrtype->cuptype != CUP_TYPE_ARRAY || arrtype->arrtype.element == NULL) {
+    freeValue(&right);
+    cup_error("osb: left is not an array");
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (right.vtype != CV_VALUE) {
+    freeValue(&right);
+    cup_error("osb: index is not a constant value");
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (right.as.value.type != &cup_type_int) {
+    cup_error("osb: index is not int");
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (arrtype->arrtype.element == &cup_type_void) {
+    cup_error("osb: array of void");
+    return (CUPValue){CV_ERROR, {}};
+  }
+  if (right.as.value.value >= arrtype->size) {
+    cup_errorf("osb: index %zu out of bounds (size %u)", right.as.value.value, arrtype->size);
+    return (CUPValue){CV_ERROR, {}};
+  }
+  /* base == 0: array data is not known at compile time, the address is
+   * computed at runtime from the nodes already emitted (pvalue = NULL).
+   * Elements are size_t-sized slots (see codegen T_OSB). */
+  return (CUPValue){CV_ADDRESS, .as.address = {arrtype->arrtype.element,
+    base ? (size_t*)base + right.as.value.value : NULL}};
 }
 
 static CUPValue at(CUPState *state, CVector* new, NRange* range) {
@@ -474,7 +482,7 @@ static CUPValue defFor(CUPState *state, CVector* new, NRange* range, CUPValue* r
         assert(0);
       }
       types[j] = item.as.address.type;
-      values[j] = *item.as.address.pvalue;
+      values[j] = item.as.address.pvalue ? *item.as.address.pvalue : 0;
       continue;
     }
     assert(0);
@@ -509,7 +517,7 @@ static CUPValue inferTypes(CUPState *state, CVector* new, NRange* range, CUPValu
     size_t count = ((size_t*)right.as.list.types)[-1];
     //const CUPType t = cup_type_array(right.as.list.types[0], count);
     assert(count < UINT16_MAX);
-    const CUPType* t = cup_type(state, CUP_TYPE_ARRAY, (uint16_t)count, right.as.list.types);
+    const CUPType* t = cup_type(state, CUP_TYPE_ARRAY, (uint16_t)count, (const void*)right.as.list.types[0]);
     CUPValue v = (CUPValue){CV_VALUE, .as.value = {.type = t, .value = (size_t)off } };
     cup_free(right.as.list.values);
     return v;
