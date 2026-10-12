@@ -323,12 +323,12 @@ size_t cup_type_snname(char *restrict s, size_t maxlen, const CUPType *type) {
       APPEND_LITERAL("[]");
       break;
     case CUP_TYPE_FUNCTION: {
-      const CUPTypeFunction fnt = type->functiontype;
-      total += cup_type_snname(s, maxlen, fnt.returntype);
+      const CUPTypeFunction *fnt = &type->functiontype; /* pointer: argstype[] is a flexible array, a by-value copy drops it */
+      total += cup_type_snname(s, maxlen, fnt->returntype);
       APPEND_LITERAL("(");
-      for (size_t i = 0; fnt.argstype[i] != &cup_type_void; ++i) {
+      for (size_t i = 0; fnt->argstype[i] != &cup_type_void; ++i) {
         if (i) APPEND_LITERAL(", ");
-        total += cup_type_snname(s + total, maxlen - total, fnt.argstype[i]);
+        total += cup_type_snname(s + total, maxlen - total, fnt->argstype[i]);
       }
       APPEND_LITERAL(")");
       break;
