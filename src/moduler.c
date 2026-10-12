@@ -600,8 +600,10 @@ CVariable *cup_get_symbol(CUPState *state, const char *name) {
 void cup_list_symbols(CUPState *state, void *ctx, cup_list_symbols_callback cb) {
   if (state == NULL)
     return;
-  for (size_t i = 0; i < state->vars.size; i++) {
-    CVariable v = state->vars.data[i];
-    cb(ctx, v.name, v.typee, v.value, v.scope);
+  /* vars.size is in bytes */
+  size_t count = state->vars.size / sizeof(CVariable);
+  for (size_t i = 0; i < count; i++) {
+    const CVariable *v = &state->vars.data[i];
+    cb(ctx, v->name, v->typee, v->value, v->scope);
   }
 }
