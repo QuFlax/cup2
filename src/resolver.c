@@ -319,7 +319,7 @@ l1:
       }
       default: {
         assert(0);
-        CUPValue value = (CUPValue) {CV_VALUE, .as.value.type = right.as.list.types[count]};
+        CUPValue value = (CUPValue) {CV_ANY, .as.any.type = right.as.list.types[count]};
         cup_free(right.as.list.values);
         //vector_push(new, start, (char*)range->it - start);
         return value;
@@ -587,7 +587,7 @@ static CUPValue inferTypes(CUPState *state, CVector* new, NRange* range, CUPValu
       assert(0);
     }
     *rtype = left;
-    return (CUPValue){CV_VALUE, .as.value.type = &cup_type_void};
+    return (CUPValue){CV_ANY, .as.value.type = &cup_type_void};
   }
   default:
     cup_errorf("defType UNKNOWN node make for '%s'", token_names[n.token]); 

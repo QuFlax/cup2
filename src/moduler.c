@@ -429,28 +429,6 @@ void cup_write_code(CUPState* state, CUPModule *m) {
   cup_free(generated);
 }
 
-struct FY {
-    /* Source input */
-    const char *input_stream;
-    const char *priv_stream;
-
-    /* Current parser token / node */
-    union {
-        Node2 nodes;
-        CVariable *variable;
-    };
-    union {
-        struct {
-            size_t *data;
-            size_t size;
-        };
-        CVector vec;
-    } scopes;
-    size_t scope;
-};
-
-static_assert(sizeof(struct FY) == 64, "");
-
 static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value, CUP_META meta) {
   switch (op) {
   case CUP_MOP_MEMBER: { // .
