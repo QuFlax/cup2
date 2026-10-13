@@ -438,6 +438,10 @@ static CUP_GEN_RESULT meta_this(CUPGenContext *ctx, CUP_META_OP op, void* value,
       cup_gen_address(ctx, (char*)value + offset, &cup_type_int);
       return CUP_GEN_DONE;
     }
+    if (meta.member.len == 5 && memcmp(meta.member.name, "scope", 5) == 0) {
+      cup_gen_address(ctx, (char*)value + offsetof(CUPState, scope), &cup_type_int);
+      return CUP_GEN_DONE;
+    }
     cup_errorf("meta_this: unknown member '%s'", meta.member.name);
     return CUP_GEN_ERROR;
   }

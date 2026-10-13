@@ -188,11 +188,24 @@ static void freeValue(CUPValue* v) {
   }
 }
 
-static void pushNumber(CVector* new, Node tmpl, size_t value) {
-  tmpl.token = T_NUMBER;
+static void pushNode2(CVector* new, Node tmpl, CTType token, size_t value) {
+  tmpl.token = token;
   vector_push(new, &tmpl, sizeof(Node));
   tmpl.value = value;
   vector_push(new, &tmpl, sizeof(Node));
+}
+
+/* constant value: T_NUMBER <value> */
+static void pushNumber(CVector* new, Node tmpl, size_t value) {
+  pushNode2(new, tmpl, T_NUMBER, value);
+}
+
+/* lvalue with a compile-time address: N_ADDRESS <address>.
+ * Codegen treats it like a variable: address in address mode, the value
+ * stored at the address in value mode (so an rvalue use yields the value,
+ * not the address). */
+static void pushAddress(CVector* new, Node tmpl, size_t address) {
+  pushNode2(new, tmpl, N_ADDRESS, address);
 }
 
 /* Run a meta callback and translate its result into nodes in `new`.
@@ -247,8 +260,10 @@ static CUPValue dot(CUPState *state, CVector* new, NRange* range, Node dotnode) 
   CUPValue v = metaApply(state, var, CUP_MOP_MEMBER, m, &gc);
   switch (v.vtype) {
   case CV_VALUE:
+    pushNumber(new, dotnode, v.as.value.value);
+    return v;
   case CV_ADDRESS:
-    pushNumber(new, dotnode, (size_t)v.as.value.value);
+    pushAddress(new, dotnode, (size_t)v.as.address.pvalue);
     return v;
   default:
     cup_errorf("dot: '.%s' did not produce a value or address", name);
@@ -365,7 +380,10 @@ static CUPValue osb(CUPState *state, CVector* new, NRange* range) {
     }
     /* drop T_OSB + operand nodes already emitted, replace with the result */
     new->size = mark;
-    pushNumber(new, osbnode, (size_t)v.as.value.value);
+    if (v.vtype == CV_ADDRESS)
+      pushAddress(new, osbnode, (size_t)v.as.address.pvalue);
+    else
+      pushNumber(new, osbnode, v.as.value.value);
     return v;
   }
   /* array indexing: left is a variable or an address holding an array */
