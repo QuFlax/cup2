@@ -434,18 +434,12 @@ Nodes primary(CUPState *state, uint8_t mpower) {
   case T_IDENTIFIER: {
     vector_pushT(left.vec, state->nodes);
     const char* name = state->nodes.svalue;
-    if (state->scope == 0) {
-      cup_error("primary: T_IDENTIFIER state->scope == 0");
-    } else {
+    if (state->scope) {
       CVariable* v = varLookup(state, name, state->scope);
-      if (v == NULL) {
+      if (v == NULL)
         putVar(state, name, NULL, 0, state->scope);
-      } else {
-        cup_error("primary: T_IDENTIFIER getVars v != NULL");
-        // TODO: check is it conflict name and type
-        //const char *s = "cup_type_name(((CVariable *)state->vars.data)[v].type)";
-        //cup_errorf("TODO: check is it conflict name and type %s", cup_type_name(state->vars[v].type));
-      }
+    } else {
+      cup_dbg("primary: T_IDENTIFIER state->scope == 0");
     }
     getToken(state, 1);
     break;
